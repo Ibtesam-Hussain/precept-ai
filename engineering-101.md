@@ -25,19 +25,25 @@ tracker_pipeline.py (sync, own thread)
 - Every event is logged to `events_log.jsonl` regardless of whether the LLM
   was actually called — so you always have a full trail to replay/debug/
   fine-tune your triggers against later.
+- LLM-generated descriptions are logged to `descriptions_log.jsonl` as a
+  separate file, containing track metadata alongside the AI-generated text
+  descriptions for analysis and debugging.
 
 ## Wiring in a real API
 
-`llm_worker.py` has two stub methods to fill in:
+The system now includes `llm_request.py` with real OpenRouter API integration:
 
-- `describe_batch_cheap()` — cheap/fast model, called often. Point this at
-  a small model (e.g. a mini-tier model from whichever provider you use).
-- `judge_escalation()` — stronger model, called rarely (gated by
-  `_should_escalate`). This is where cost is allowed to be higher, because
-  volume is low by construction.
+- `describe_batch_cheap()` — implements actual API calls to OpenRouter using
+  the free Qwen 3.8-27B model. Processes batches of track events with image
+  data encoded as base64 for vision-language model understanding.
+- Set `OPENROUTER_API_KEY` environment variable to enable real API calls.
+- The function handles multiple images in a single API call for efficiency,
+  requesting one-sentence descriptions per image in order.
 
-Both already show the shape of an API call in their docstrings — swap in
-your actual client.
+To use real API calls:
+1. Set your OpenRouter API key: `export OPENROUTER_API_KEY=your_key_here`
+2. The system will automatically use the live API instead of stub responses
+3. Monitor costs on OpenRouter dashboard - the free tier model is used by default
 
 ## Tuning knobs (start here once it's running)
 
