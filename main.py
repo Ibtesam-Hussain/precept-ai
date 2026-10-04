@@ -18,7 +18,7 @@ def main():
 
     bridge = EventBridge()
     threading.Thread(target=run_tracker, args=(source, bridge, args.model, args.visualize), daemon=True).start()
-    asyncio.run(LLMWorker(bridge).run_forever())
+    asyncio.run(LLMWorker(bridge, description_log_path="descriptions_log.jsonl").run_forever())
 
 
 if __name__ == "__main__":
