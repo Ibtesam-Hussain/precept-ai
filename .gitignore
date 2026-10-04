@@ -9,6 +9,7 @@ __pycache__/
 
 # Logs and runtime data
 events_log.jsonl
+descriptions_log.jsonl
 *.log
 
 # Model files (heavy)
