@@ -39,7 +39,15 @@ async def describe_batch_cheap(events: List[TrackEvent]) -> List[str]:
 
     for i, e in enumerate(events):
         content.append({"type": "text", "text": f"Image {i + 1} ({e.class_name}, track {e.track_id}):"})
-        _, buf = cv2.imencode(".jpg", e.crop)
+        height, width = e.crop.shape[:2]
+        scale = min(384 / max(height, width), 1.0)
+        if scale < 1.0:
+            resized_width = max(1, int(width * scale))
+            resized_height = max(1, int(height * scale))
+            crop = cv2.resize(e.crop, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+        else:
+            crop = e.crop
+        _, buf = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         b64 = base64.b64encode(buf).decode()
         content.append({
             "type": "image_url",
@@ -48,7 +56,8 @@ async def describe_batch_cheap(events: List[TrackEvent]) -> List[str]:
 
     response = await asyncio.to_thread(
         client.chat.completions.create,
-        model="qwen/qwen3.8-27b:free",
+        # model="qwen/qwen3.8-27b",  #this qwen model got paid
+        model="google/gemma-4-31b-it:free",  # this gemma model is free
         messages=[{"role": "user", "content": content}],
     )
 
