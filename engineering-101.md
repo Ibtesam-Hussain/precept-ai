@@ -192,3 +192,68 @@ With our thresholds (typical case):
    before scaling up.
 4. Once stable, swap `yolo26n.pt` for `yolo26s.pt` only if you find recall
    is the bottleneck, not before.
+
+## Current Implementation Addendum (2026-10-06)
+
+This addendum describes the current code. Where it conflicts with the earlier
+scaffold notes above, use this section for current behavior; the older content
+is retained as project history.
+
+### Changes now implemented
+
+- **Vision model:** `llm_request.py` currently selects
+  `google/gemma-4-31b-it:free` on OpenRouter. The previous
+  `qwen/qwen3.8-27b:free` slug returned HTTP 404 because that free variant was
+  unavailable. The paid `qwen/qwen3.8-27b` slug remains commented in source.
+  Free model availability and rate limits can change.
+- **Smaller image payloads:** crops are only downscaled when the longest side
+  is above 384 px, using `cv2.INTER_AREA`; JPEG quality is 70 before base64
+  encoding. This lowers payload size but does not guarantee avoiding 429s.
+- **Batching and throttling:** `LLMWorker` requests up to 8 events with a
+  3-second wait for events to accumulate. On an exception whose text contains
+  `429`, it pauses 4 seconds. This is a delay, not a retry of the failed batch.
+- **SQLite persistence:** the worker stores each event in `precept.db` before
+  attempting a description. Successful descriptions are stored separately.
+  `storage.py` enables WAL mode. The database contains event/description
+  metadata, not video or image crops. JSONL files described earlier are legacy;
+  they are no longer written by the current worker.
+- **Dashboard:** `interface/dashboard.py` exposes `/api/recent` and a simple
+  page that polls every 2 seconds. `main.py` does not launch the dashboard.
+  Run it separately with `uvicorn interface.dashboard:app --reload` from the
+  repository root, using the same working directory as the tracker so both
+  processes open the same relative `precept.db`.
+- **Speech:** `tts_narrator.py` runs `pyttsx3` on a background thread and
+  consumes descriptions from a queue, keeping speech work out of the tracker
+  and LLM request path.
+- **Dependencies:** `requirements.txt` includes the original vision/API
+  packages plus `fastapi`, `uvicorn`, and `pyttsx3` for the dashboard and
+  narrator.
+
+### Current event behavior
+
+`TrackStateManager` currently uses `stable_frames=10`, `exit_after=15`,
+`appearance_hash_threshold=30`, and `recheck_cooldown_frames=30`. The stable
+counter counts detections; it does not check that they were consecutive.
+`track_new` and `track_exited` are persisted but do not trigger image calls.
+Only `track_stable` and `track_appearance_changed` events are sent to the
+vision model. The worker's in-memory description cache is not currently used
+to deduplicate requests.
+
+### Development practices and next steps
+
+1. Run the tracker and dashboard from the repository root. `DB_PATH` is
+   relative, so different working directories can create separate databases.
+2. Iterate with a short local video (`python main.py --source .\clip.mp4`)
+   before leaving a camera or stream running. Inspect `precept.db` and
+   `/api/recent`; do not expect the old JSONL files to update.
+3. Add tests for track transitions, crop encoding dimensions/quality options,
+   event persistence, and one-description-per-image response mapping.
+4. Add a durable error/retry state for LLM failures. Events are stored before
+   the call, but failed descriptions currently have no database status and the
+   failed batch is skipped.
+5. Add coordinated shutdown for the tracker thread, async worker, and narrator.
+6. Before exposing the dashboard beyond a trusted local environment, render
+   model-generated strings as text instead of inserting them through
+   `innerHTML`.
+7. Before long-running storage use, add schema migrations, retention policy,
+   indexes, and an explicit configurable database path.
