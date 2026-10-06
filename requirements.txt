@@ -4,3 +4,6 @@ imagehash
 Pillow
 openai
 python-dotenv
+fastapi
+uvicorn
+pyttsx3
