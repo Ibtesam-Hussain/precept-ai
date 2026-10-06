@@ -3,6 +3,7 @@ import cv2
 from ultralytics import YOLO
 from debounce import TrackStateManager
 from event_queue import EventBridge
+import frame_bus
 
 
 def run_tracker(source, bridge: EventBridge, model_path="yolo26n.pt", visualize=False):
@@ -13,8 +14,13 @@ def run_tracker(source, bridge: EventBridge, model_path="yolo26n.pt", visualize=
     for result in model.track(source=source, stream=True, persist=True, verbose=False):
         frame_idx += 1
 
+        annotated = result.plot()  # draws boxes + track IDs
+
+        ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if ok:
+            frame_bus.set_frame(buf.tobytes())  # publish for the dashboard's live feed
+
         if visualize:
-            annotated = result.plot()
             cv2.imshow("Tracker debug", annotated)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
