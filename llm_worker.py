@@ -43,7 +43,7 @@ class LLMWorker:
         except Exception as exc:
             logger.warning("LLM call failed, skipping this batch: %s", exc)
             if "429" in str(exc):
-                await asyncio.sleep(3)
+                await asyncio.sleep(4)
             return
 
         for event, description in zip(needs_description, results):
