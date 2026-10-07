@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0e12">
+<title>PRECEPT — Live Console</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="console">
+    <header class="console-head">
+      <div>
+        <div class="brand">PRECEPT</div>
+        <p class="brand-subtitle">Vision intelligence console</p>
+      </div>
+      <div class="header-meta">
+        <div id="connection-status" class="connection-status is-loading" role="status" aria-live="polite">
+          <span class="status-dot"></span>
+          <span id="connection-label">Connecting</span>
+        </div>
+        <time id="clock" class="clock" datetime="">--:--:--</time>
+      </div>
+    </header>
+
+    <div class="dashboard-grid">
+      <section class="panel feed-panel" aria-labelledby="feed-title">
+        <div class="panel-title-row">
+          <h2 id="feed-title" class="panel-title">Live feed</h2>
+          <span class="panel-tag">Camera 01</span>
+        </div>
+        <div class="feed-frame">
+          <img id="live-feed" src="/video" alt="Live annotated camera feed">
+          <div id="feed-loading" class="feed-loading">Waiting for video stream…</div>
+          <div id="feed-error" class="feed-error" hidden>Video stream unavailable</div>
+          <span class="corner corner-tl"></span>
+          <span class="corner corner-tr"></span>
+          <span class="corner corner-bl"></span>
+          <span class="corner corner-br"></span>
+        </div>
+      </section>
+
+      <section class="panel scene-panel" aria-labelledby="scene-title">
+        <div class="panel-title-row">
+          <h2 id="scene-title" class="panel-title">Active targets</h2>
+          <span id="target-count" class="panel-tag">0 active</span>
+        </div>
+        <div id="scene" class="scene-list" aria-live="polite">
+          <div class="empty">No targets in frame</div>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel session-panel" aria-labelledby="session-title">
+      <div class="panel-title-row">
+        <h2 id="session-title" class="panel-title">Today’s activity</h2>
+        <span class="panel-tag">Local time</span>
+      </div>
+      <div class="session-row">
+        <div id="stats-numbers" class="stats-numbers" aria-live="polite">Loading activity…</div>
+        <div id="hourly-chart" class="hourly-chart" aria-label="Hourly activity chart"></div>
+      </div>
+    </section>
+
+    <section class="panel log-panel" aria-labelledby="log-title">
+      <div class="panel-title-row">
+        <h2 id="log-title" class="panel-title">Recent visits</h2>
+        <span class="panel-tag">Latest 20</span>
+      </div>
+      <div id="visits" class="visit-list" aria-live="polite">
+        <div class="empty">Loading activity…</div>
+      </div>
+    </section>
+  </main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
