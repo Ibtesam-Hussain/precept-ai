@@ -30,6 +30,10 @@ class LLMWorker:
     async def _process_batch(self, batch: List[TrackEvent]):
         for e in batch:
             storage.insert_event(e)
+            if e.crop is not None:
+                ok, buf = cv2.imencode(".jpg", e.crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if ok:
+                    thumbnails.set_thumb(e.track_id, buf.tobytes())
 
         needs_description = [e for e in batch if e.event_type in
                             (EventType.TRACK_STABLE, EventType.TRACK_APPEARANCE_CHANGED)]
@@ -60,8 +64,3 @@ class LLMWorker:
                 description=description,
             )
             tts_narrator.speak(description)
-
-            if event.crop is not None:
-                ok, buf = cv2.imencode(".jpg", event.crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                if ok:
-                    thumbnails.set_thumb(event.track_id, buf.tobytes())
