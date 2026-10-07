@@ -1,158 +1,109 @@
-# Project Context: Precept AI Vision + LLM Tracking Prototype
+# Precept AI — Current Project Context
 
-## Objective
-This repository implements a lightweight vision-language pipeline for real-time object tracking and semantic description. The system detects objects in a source video, assigns persistent IDs across frames, emits track lifecycle events, and for selected events sends cropped images to a multimodal LLM for natural-language interpretation.
+Last updated: 2026-10-07. This file describes the current implementation; use
+it instead of older scaffold notes that may describe removed behavior.
 
-## Current implementation
+## Purpose
 
-### 1. Entry and orchestration
-`main.py` is the application entry point. It:
-- parses CLI arguments for source, model path, and visualization mode
-- instantiates an `EventBridge`
-- starts the tracking loop in a background thread
-- runs the async `LLMWorker` in the main event loop
+Precept combines YOLO object tracking, event-based track lifecycle handling,
+multimodal LLM descriptions, SQLite persistence, optional speech narration,
+and a local browser dashboard.
 
-This creates a producer-consumer architecture where tracking and multimodal reasoning run concurrently.
+## Run the application
 
-### 2. Detection and tracking pipeline
-`tracker_pipeline.py` is the perception layer. It:
-- initializes `YOLO(model_path)`
-- iterates over frames via `model.track(..., stream=True, persist=True)`
-- extracts `xyxy` boxes and `track_id` values
-- resolves class names using `model.names`
-- crops each detected object from `result.orig_img`
-- pushes per-object events to the event bridge using `TrackStateManager.update(...)`
+The repository includes a Python virtual environment at `venv/`. Activate it
+before running the app so dependencies such as FastAPI and `pyttsx3` come from
+the same environment:
 
-This gives the app frame-level detection with persistent cross-frame identity for tracked objects.
+```powershell
+.\venv\Scripts\Activate.ps1
+python main.py --source 0 --visualize
+```
 
-### 3. Track lifecycle and event semantics
-`debounce.py` implements the track state machine. It maintains a map of active tracks keyed by `track_id` and emits event objects from `track_events.py`.
+The default dashboard is at `http://localhost:8000`. `main.py` accepts
+`--source`, `--model`, `--visualize`, and `--dashboard-port`. It starts the
+tracker and Uvicorn dashboard on background threads, then runs the async LLM
+worker in the main thread. Press `q` in the OpenCV window to stop visualization;
+stop the process to shut down the app.
 
-Supported states:
-- `TRACK_NEW`
-- `TRACK_STABLE`
-- `TRACK_APPEARANCE_CHANGED`
-- `TRACK_EXITED`
+## Runtime architecture
 
-The state manager uses:
-- `frames_seen` to determine stability after a threshold
-- `last_description_frame` and a cooldown window to limit repeated LLM calls
-- perceptual hashing via `imagehash.phash` to detect major appearance changes
-- `sweep_exits` to remove tracks after inactivity
+1. `tracker_pipeline.py` loads YOLO and consumes frames with persistent track
+   IDs. It publishes annotated quality-70 JPEGs to `frame_bus.py`, extracts
+   object crops, and sends lifecycle events to `EventBridge`.
+2. `debounce.py` emits `TRACK_NEW`, `TRACK_STABLE`,
+   `TRACK_APPEARANCE_CHANGED`, and `TRACK_EXITED`. Current defaults are 10
+   detections to stable, 15 frames before exit, appearance hash threshold 30,
+   and 30 frames between rechecks.
+3. `event_queue.py` transfers events from the synchronous tracker to the async
+   worker and batches up to 8 events with a 3-second collection wait.
+4. `llm_worker.py` persists events, caches crop JPEGs before any LLM request,
+   clears thumbnail/description cache entries on exit, and asks for descriptions
+   only for stable or appearance-changed events.
+5. `llm_request.py` sends crops through OpenRouter using
+   `google/gemma-4-31b-it:free`. Images are downscaled only when their longest
+   side exceeds 384 pixels and encoded as JPEG at quality 70. HTTP 429 errors
+   cause a 4-second pause; failed batches are not retried.
+6. `storage.py` stores event and description metadata in `precept.db` using
+   SQLite WAL mode. The path is relative to the process working directory.
+   Older JSONL files may remain in the repository but are not the current
+   worker's persistence path.
+7. `tts_narrator.py` uses `pyttsx3` in a background thread so speech does not
+   block tracking or the LLM request loop.
 
-This creates a simple event-based abstraction layer between low-level vision and the LLM reasoning component.
+## Dashboard
 
-### 4. Event schema and batching
-`track_events.py` defines the `TrackEvent` dataclass and `EventType` enum. Each event stores:
-- `track_id`
-- `event_type`
-- `class_name`
-- `bbox`
-- `confidence`
-- `frame_idx`
-- `crop` (optional image array)
-- `timestamp`
-- `extra`
+`interface/dashboard.py` serves `interface/static/` and provides:
 
-`event_queue.py` wraps a Python `queue.Queue` behind an async batching API:
-- `put(event)` enqueues a track event
-- `get_batch(max_batch, max_wait_s)` collects events in a short wait window
+- `/api/status` — dashboard health and update timestamp
+- `/api/scene` — active tracks and latest descriptions
+- `/api/stats` — today's event totals and hourly activity
+- `/api/visits` — recent completed track visits
+- `/thumb/{track_id}` — current in-memory JPEG crop, or 404 when unavailable
+- `/video` — continuous MJPEG (`multipart/x-mixed-replace; boundary=frame`)
 
-This design reduces API overhead by grouping multiple track events into one LLM call.
+`frame_bus.py` is a lock-protected latest-frame buffer shared by the tracker
+and dashboard in this single process. The MJPEG generator checks for new frames
+at up to 30 Hz and emits only when the tracker has published a different JPEG.
+This removes the old one-snapshot-per-second browser polling, but does not
+increase YOLO's inference rate.
 
-### 5. LLM reasoning layer
-`llm_worker.py` implements the async worker that consumes queued events and decides which ones merit semantic captioning.
+The static dashboard uses an `<img>` connected once to `/video`. JavaScript
+refreshes scene, statistics, and visits every five seconds and reports
+connection, loading, and feed-error states. It builds DOM content with
+`textContent` instead of interpolating dynamic strings as HTML. Feed overlay
+CSS explicitly honors `[hidden]` so hidden loading/error overlays do not cover
+a successfully loaded frame.
 
-Processing flow:
-- reads queued events in batches
-- logs raw event payloads to `events_log.jsonl`
-- filters events with `EventType.TRACK_STABLE` and `EventType.TRACK_APPEARANCE_CHANGED`
-- clears cache entries on `TRACK_EXITED`
-- calls `describe_batch_cheap(...)`
-- stores LLM outputs in a `cache` keyed by `track_id`
-- writes natural-language descriptions to `descriptions_log.jsonl`
+Thumbnails are in memory, not SQLite or disk. They are cached from event crops
+before requesting an LLM description, so an LLM failure does not prevent a
+thumbnail for an event from being available. Thumbnails disappear when a track
+exits or the app process restarts.
 
-This worker acts as the semantic reasoning layer and provides the glue between vision events and LLM interpretation.
+## Tests and current caveats
 
-### 6. Multimodal request construction
-`llm_request.py` sends cropped images to a remote multimodal model through OpenRouter.
+`tests/test_dashboard.py` contains health/markup checks and an MJPEG response
+regression test. These tests were not run during the latest change at the user's
+request. A test attempt using the system Python failed because that interpreter
+lacks FastAPI; run tests from the repository venv.
 
-Implementation details:
-- creates an `OpenAI` client with `base_url="https://openrouter.ai/api/v1"`
-- loads API credentials from `.env` using `python-dotenv`
-- downscales crops only when needed so the longest side is at most 384 pixels, using `cv2.resize` with `INTER_AREA`
-- JPEG-encodes crops at quality 70 using `cv2.IMWRITE_JPEG_QUALITY`
-- converts the image bytes to base64
-- inserts them into a multimodal OpenAI chat payload as `image_url` entries
-- sends a prompt that instructs the model to describe each image in a single sentence, in order
-- currently selects `google/gemma-4-31b-it:free` on OpenRouter
-- retains `qwen/qwen3.8-27b` as a commented paid-model option; the previous `qwen/qwen3.8-27b:free` slug returned HTTP 404 because that model was no longer available on the free tier
+Use the venv interpreter consistently. During troubleshooting,
+`E:/Python Installation/python.exe` failed to import `pyttsx3` (and later
+FastAPI), while the project venv is the intended runtime. If the browser feed
+stutters after switching to MJPEG, check actual tracker FPS: camera throughput,
+YOLO model size, input resolution, and inference hardware remain the main
+limits.
 
-The response is split by newline and mapped back to the batch of events. The function returns a list of description strings aligned to the event list.
+## Main files
 
-### 7. API batching and rate-limit handling
-The worker requests batches of up to 8 events and waits up to 3 seconds for events to accumulate (`max_wait_s=3.0`). If an LLM request exception contains `429`, it waits 4 seconds before continuing. Other API errors, including the previous Qwen model HTTP 404, are logged and skipped without that backoff.
-
-The Gemma model selection is present in the current source; its successful runtime behavior has not been confirmed in the captured logs. The observed logs confirm the camera/YOLO stream ran, while OpenRouter rejected the former Qwen free-tier model slug.
-
-## Data flow
-The actual runtime path is:
-
-1. `main.py` spawns tracking thread and async LLM loop
-2. `tracker_pipeline.py` reads frames and emits track events
-3. `TrackStateManager` decides when a track is new/stable/changed/exited
-4. `EventBridge` batches events
-5. `LLMWorker` selects image-bearing events
-6. `describe_batch_cheap(...)` sends cropped frames to the LLM
-7. descriptions are cached and logged to JSONL files
-
-## Current system characteristics
-This project is an early-stage prototype and is intentionally modular but not yet production-grade.
-
-Present:
-- real-time object tracking using YOLO
-- track-level event modeling
-- asynchronous queue processing
-- multimodal image-to-text reasoning via OpenRouter, currently configured for Gemma 4 31B Instruct free tier
-- crop payload reduction (maximum longest side 384 px, JPEG quality 70)
-- batch wait up to 3 seconds and 4-second backoff for HTTP 429 errors
-- JSON-based logging for traceability and experimentation
-
-Missing / not implemented yet:
-- persistent database storage
-- query layer over historical track states
-- web/API frontend
-- alerting or rule engine
-- robust monitoring, retries, and failure recovery
-- security and config management for deployment
-
-## Dependencies
-From `requirements.txt`:
-- `ultralytics`
-- `opencv-python`
-- `imagehash`
-- `Pillow`
-- `openai`
-- `python-dotenv`
-
-## Architectural interpretation
-This repo is best understood as a vision-language streaming pipeline:
-- the detector/tracker handles perception
-- the state manager handles temporal event reasoning
-- the LLM handles semantic interpretation of boxed object crops
-
-The project is currently a research/POC pipeline rather than a production-ready system, but it cleanly demonstrates the core pattern of combining detection, temporal tracking, and multimodal reasoning.
-
-## Key files
-- `main.py` — bootstraps the app
-- `tracker_pipeline.py` — video processing and tracking
-- `debounce.py` — state machine for track lifecycle transitions
-- `track_events.py` — event definitions
-- `event_queue.py` — async producer/consumer queue
-- `llm_worker.py` — reasoning pipeline and caching
-- `llm_request.py` — multimodal LLM API integration
-- `README.md` — architecture roadmap and project notes
-- `requirements.txt` — dependency list
-
-## Summary
-The repository implements a modular prototype for surveillance-style object understanding using YOLO + event tracking + LLM-based visual description. The core novelty is not just detection, but the conversion of tracked object crops into semantic descriptions that can be logged, queried, and extended into higher-level behavior analysis.
+- `main.py` — process orchestration and CLI
+- `tracker_pipeline.py` — YOLO frame loop and frame publication
+- `frame_bus.py` — latest encoded frame shared with the web server
+- `debounce.py`, `track_events.py`, `event_queue.py` — event state and handoff
+- `llm_worker.py`, `llm_request.py` — crop cache, LLM batching, descriptions
+- `storage.py` — SQLite reads and writes
+- `thumbnails.py`, `tts_narrator.py` — in-memory crops and speech output
+- `interface/dashboard.py` — FastAPI routes and MJPEG response
+- `interface/static/` — dashboard markup, styles, and browser behavior
+- `tests/test_dashboard.py` — dashboard endpoint and markup checks
+- `requirements.txt` — Python dependencies
