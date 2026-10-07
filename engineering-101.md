@@ -257,3 +257,59 @@ to deduplicate requests.
    `innerHTML`.
 7. Before long-running storage use, add schema migrations, retention policy,
    indexes, and an explicit configurable database path.
+
+## Current Implementation Addendum (2026-10-07)
+
+This update supersedes dashboard, storage, and thumbnail statements in the
+2026-10-06 addendum where they conflict with the current source.
+
+### Dashboard and live video
+
+- `main.py` starts the tracker and the FastAPI/Uvicorn dashboard on background
+  threads, then runs `LLMWorker` on the main asyncio loop. The default dashboard
+  address is `http://localhost:8000`.
+- `interface/dashboard.py` serves the static dashboard and these routes:
+  `/api/status`, `/api/scene`, `/api/stats`, `/api/visits`, `/thumb/{track_id}`,
+  and `/video`.
+- `/video` is a continuous `multipart/x-mixed-replace` MJPEG response. Its async
+  generator checks the thread-safe latest-frame buffer at up to 30 Hz and sends
+  only newly published JPEG frames. Actual frame rate is limited by YOLO and the
+  camera/source; 30 Hz is a polling ceiling, not a frame-rate guarantee.
+- `tracker_pipeline.py` encodes annotated frames as JPEG at quality 70 and
+  publishes them through `frame_bus.py`. LLM work does not block this frame path.
+- `interface/static/index.html` uses an `<img>` for the MJPEG stream.
+  `interface/static/app.js` connects once instead of reloading one JPEG per
+  second, refreshes dashboard API data every five seconds, and renders status,
+  loading, and error states. DOM content is built with text nodes rather than
+  inserting model-generated strings as HTML.
+- `interface/static/style.css` is responsive. Explicit `[hidden]` rules on feed
+  overlays ensure a loaded image can hide the error/loading layer despite the
+  overlay's grid display styling.
+
+### Thumbnails, persistence, and narration
+
+- `llm_worker.py` caches each event crop as a quality-70 JPEG before making an
+  LLM request. `/thumb/{track_id}` serves that in-memory thumbnail. This keeps
+  thumbnails independent of LLM success; the cache is cleared on track exit
+  and is not persistent across process restarts.
+- Events and descriptions are stored in `precept.db` by `storage.py`, using
+  SQLite WAL mode. The database path is relative to the process working
+  directory. The JSONL log files mentioned in older notes are not the current
+  worker's persistence path.
+- Narration uses `pyttsx3` on a background thread. It is started by
+  `LLMWorker`; the package must be installed in the same Python environment
+  that launches `main.py`.
+
+### Running and verification
+
+- Activate the repository's `venv` before launching, for example:
+  `python main.py --source 0 --visualize`. The system Python at
+  `E:/Python Installation/python.exe` did not have the app dependencies during
+  troubleshooting, even though the project venv did.
+- `tests/test_dashboard.py` covers dashboard health/markup and includes an
+  MJPEG response test. The tests were not run during this update at the user's
+  request. A system-Python test attempt failed because that interpreter lacked
+  FastAPI; use the project venv for any future test run.
+- A smoother dashboard transport does not speed up YOLO inference. If the
+  stream still stutters, measure tracker FPS and then consider model size,
+  input resolution, or inference device.
