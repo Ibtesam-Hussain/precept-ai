@@ -52,3 +52,6 @@ Thumbs.db
 /precept.db
 /precept.db-wal
 /precept.db-shm
+
+#test 
+tests/
