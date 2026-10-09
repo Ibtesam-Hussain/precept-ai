@@ -1,7 +1,7 @@
 # Precept AI — Current Project Context
 
-Last updated: 2026-10-07. This file describes the current implementation; use
-it instead of older scaffold notes that may describe removed behavior.
+Last updated: 2026-10-09. This file reflects the current repository snapshot;
+use it instead of older scaffold notes that may describe removed behavior.
 
 ## Purpose
 
@@ -32,22 +32,18 @@ stop the process to shut down the app.
    IDs. It publishes annotated quality-70 JPEGs to `frame_bus.py`, extracts
    object crops, and sends lifecycle events to `EventBridge`.
 2. `debounce.py` emits `TRACK_NEW`, `TRACK_STABLE`,
-   `TRACK_APPEARANCE_CHANGED`, and `TRACK_EXITED`. Current defaults are 10
-   detections to stable, 15 frames before exit, appearance hash threshold 30,
-   and 30 frames between rechecks.
+   `TRACK_APPEARANCE_CHANGED`, and `TRACK_EXITED` as track state changes are
+   detected across frames.
 3. `event_queue.py` transfers events from the synchronous tracker to the async
    worker and batches up to 8 events with a 3-second collection wait.
 4. `llm_worker.py` persists events, caches crop JPEGs before any LLM request,
    clears thumbnail/description cache entries on exit, and asks for descriptions
    only for stable or appearance-changed events.
-5. `llm_request.py` sends crops through OpenRouter using
-   `google/gemma-4-31b-it:free`. Images are downscaled only when their longest
-   side exceeds 384 pixels and encoded as JPEG at quality 70. HTTP 429 errors
-   cause a 4-second pause; failed batches are not retried.
+5. `llm_request.py` sends crop data through OpenRouter using the configured
+   model and returns descriptions for a batch. HTTP 429 errors trigger a short
+   pause; failed batches are not retried.
 6. `storage.py` stores event and description metadata in `precept.db` using
    SQLite WAL mode. The path is relative to the process working directory.
-   Older JSONL files may remain in the repository but are not the current
-   worker's persistence path.
 7. `tts_narrator.py` uses `pyttsx3` in a background thread so speech does not
    block tracking or the LLM request loop.
 
@@ -80,12 +76,11 @@ before requesting an LLM description, so an LLM failure does not prevent a
 thumbnail for an event from being available. Thumbnails disappear when a track
 exits or the app process restarts.
 
-## Tests and current caveats
+## Current caveats
 
-`tests/test_dashboard.py` contains health/markup checks and an MJPEG response
-regression test. These tests were not run during the latest change at the user's
-request. A test attempt using the system Python failed because that interpreter
-lacks FastAPI; run tests from the repository venv.
+There is no automated test suite checked into this repository snapshot at the
+moment. The earlier note about `tests/test_dashboard.py` is stale and should not
+be treated as part of the current codebase.
 
 Use the venv interpreter consistently. During troubleshooting,
 `E:/Python Installation/python.exe` failed to import `pyttsx3` (and later
@@ -105,5 +100,4 @@ limits.
 - `thumbnails.py`, `tts_narrator.py` — in-memory crops and speech output
 - `interface/dashboard.py` — FastAPI routes and MJPEG response
 - `interface/static/` — dashboard markup, styles, and browser behavior
-- `tests/test_dashboard.py` — dashboard endpoint and markup checks
 - `requirements.txt` — Python dependencies
