@@ -27,7 +27,12 @@ def status():
 
 @app.get("/api/scene")
 def scene():
-    return {"tracks": storage.get_active_tracks()}
+    active_track_ids = thumbnails.get_active_track_ids()
+    tracks = [
+        track for track in storage.get_active_tracks()
+        if track["track_id"] in active_track_ids
+    ]
+    return {"tracks": tracks}
 
 
 @app.get("/api/stats")
@@ -44,8 +49,12 @@ def visits():
 def thumb(track_id: int):
     data = thumbnails.get_thumb(track_id)
     if data is None:
-        return Response(status_code=404)
-    return Response(content=data, media_type="image/jpeg")
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def stream_video():

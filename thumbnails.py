@@ -5,10 +5,11 @@ image alongside each description. Cleared when a track exits.
 """
 
 import threading
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional, Set
 
 _lock = threading.Lock()
 _thumbs: Dict[int, bytes] = {}
+_active_track_ids: Set[int] = set()
 
 
 def set_thumb(track_id: int, jpeg_bytes: bytes) -> None:
@@ -24,3 +25,14 @@ def get_thumb(track_id: int) -> Optional[bytes]:
 def clear_thumb(track_id: int) -> None:
     with _lock:
         _thumbs.pop(track_id, None)
+
+
+def set_active_track_ids(track_ids: Iterable[int]) -> None:
+    with _lock:
+        _active_track_ids.clear()
+        _active_track_ids.update(track_ids)
+
+
+def get_active_track_ids() -> Set[int]:
+    with _lock:
+        return set(_active_track_ids)

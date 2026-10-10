@@ -3,6 +3,7 @@ opencv-python
 imagehash
 Pillow
 openai
+groq
 python-dotenv
 fastapi
 uvicorn

@@ -83,11 +83,17 @@ const renderScene = (tracks) => {
     const item = document.createElement("article");
     item.className = "scene-item";
 
+    const thumbnail = document.createElement("div");
+    thumbnail.className = "scene-thumbnail";
     const image = document.createElement("img");
     image.src = `/thumb/${track.track_id}`;
     image.alt = `${track.class_name} track ${track.track_id}`;
     image.loading = "lazy";
-    image.addEventListener("error", () => image.classList.add("is-unavailable"));
+    image.addEventListener("error", () => thumbnail.classList.add("is-unavailable"));
+    const placeholder = document.createElement("span");
+    placeholder.className = "thumbnail-placeholder";
+    placeholder.textContent = "NO CROP";
+    thumbnail.append(image, placeholder);
 
     const details = document.createElement("div");
     details.className = "scene-details";
@@ -105,7 +111,7 @@ const renderScene = (tracks) => {
     description.className = "scene-description";
     description.textContent = track.description || "Awaiting description…";
     details.append(header, description);
-    item.append(image, details);
+    item.append(thumbnail, details);
     elements.scene.appendChild(item);
   });
 };

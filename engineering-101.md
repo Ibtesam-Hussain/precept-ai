@@ -1,5 +1,10 @@
 # Vision + LLM Object Tracking — Event-Driven Scaffold
 
+> **Current source of truth:** This document began as a scaffold and contains
+> historical notes that no longer describe the running application. Use the
+> latest dated addendum at the bottom for current behavior; older sections are
+> retained as design history unless explicitly updated there.
+
 ## Flow
 
 ```
@@ -258,7 +263,7 @@ to deduplicate requests.
 7. Before long-running storage use, add schema migrations, retention policy,
    indexes, and an explicit configurable database path.
 
-## Current Implementation Addendum (2026-10-07)
+## Current Implementation Addendum (2026-10-07, superseded)
 
 This update supersedes dashboard, storage, and thumbnail statements in the
 2026-10-06 addendum where they conflict with the current source.
@@ -288,10 +293,9 @@ This update supersedes dashboard, storage, and thumbnail statements in the
 
 ### Thumbnails, persistence, and narration
 
-- `llm_worker.py` caches each event crop as a quality-70 JPEG before making an
-  LLM request. `/thumb/{track_id}` serves that in-memory thumbnail. This keeps
-  thumbnails independent of LLM success; the cache is cleared on track exit
-  and is not persistent across process restarts.
+- At this point in the project, `llm_worker.py` cached event crops before an
+  LLM request. This behavior was later moved to the tracker; see the current
+  addendum below.
 - Events and descriptions are stored in `precept.db` by `storage.py`, using
   SQLite WAL mode. The database path is relative to the process working
   directory. The JSONL log files mentioned in older notes are not the current
@@ -306,10 +310,60 @@ This update supersedes dashboard, storage, and thumbnail statements in the
   `python main.py --source 0 --visualize`. The system Python at
   `E:/Python Installation/python.exe` did not have the app dependencies during
   troubleshooting, even though the project venv did.
-- `tests/test_dashboard.py` covers dashboard health/markup and includes an
-  MJPEG response test. The tests were not run during this update at the user's
-  request. A system-Python test attempt failed because that interpreter lacked
-  FastAPI; use the project venv for any future test run.
+- The test-suite note in this historical addendum is stale. There is no
+  automated test suite in the current repository snapshot.
 - A smoother dashboard transport does not speed up YOLO inference. If the
   stream still stutters, measure tracker FPS and then consider model size,
   input resolution, or inference device.
+
+## Current Implementation Addendum (2026-10-10)
+
+This addendum supersedes prior provider, worker, thumbnail, active-scene, and
+test-suite descriptions where they conflict with current source.
+
+### Groq vision requests and throughput
+
+- `llm_request.py` uses the Groq SDK with `qwen/qwen3.8-27b`. The prior
+  OpenRouter client/request remains commented in the source as a reference.
+- Each request contains at most 3 images because this Groq model reports a
+  maximum of 3 images per request. Larger worker batches are split into
+  sequential requests of 3 or fewer images.
+- Requests stream their response and cap `max_completion_tokens` at 256. The
+  previous 2048-token reservation exceeded the observed 1000 output-tokens-per-
+  minute quota. Provider 429s can still cause long SDK retry delays; reducing
+  image count and token reservation does not guarantee quota headroom.
+- `LLMWorker` processes batches sequentially and waits for descriptions before
+  taking the next batch. Events are persisted before the request for their
+  current batch, but events arriving during a long provider retry wait in the
+  queue and are not persisted until the worker resumes. This makes the LLM path
+  the current throughput bottleneck; tracker and video work run separately.
+- Only `track_stable` and `track_appearance_changed` events trigger vision
+  requests. `track_new` and `track_exited` are persisted but do not request
+  descriptions.
+
+### Live thumbnails and active targets
+
+- The tracker now JPEG-encodes crop-bearing lifecycle events and stores them in
+  `thumbnails.py` directly, independent of the LLM queue. Track exits clear the
+  corresponding thumbnail. Thumbnails are in-memory only and are not retained
+  after process restart.
+- The tracker publishes its current active track IDs in memory. `/api/scene`
+  filters SQLite's latest non-exited track rows against those IDs, preventing
+  tracks still awaiting a delayed exit-event write from appearing as active.
+- `/thumb/{track_id}` sets `Cache-Control: no-store`. The dashboard provides a
+  "NO CROP" placeholder when a thumbnail is unavailable; it should not show a
+  broken-image icon. A missing crop can still return 404 if no crop has yet
+  been emitted or encoded for that track.
+- Recent Visits currently provides textual visit metadata and descriptions.
+  Visit snapshots are not durably stored, so a persistent visual history has
+  not yet been implemented.
+
+### Confirmed operating observations and repository status
+
+- During the 2026-10-10 run, the user confirmed YOLO tracking, the dashboard's
+  live video feed, and database event recording were working as expected. The
+  remaining observed bottleneck was Groq description throughput/rate limiting.
+- There is no automated test suite checked into the current repository
+  snapshot. Syntax checks and `git diff --check` were used for the recent
+  Groq/thumbnail changes; no live Groq API test was run as part of those edits.
+

@@ -1,6 +1,6 @@
 # Precept AI — Current Project Context
 
-Last updated: 2026-10-09. This file reflects the current repository snapshot;
+Last updated: 2026-10-10. This file reflects the current repository snapshot;
 use it instead of older scaffold notes that may describe removed behavior.
 
 ## Purpose
@@ -36,15 +36,20 @@ stop the process to shut down the app.
    detected across frames.
 3. `event_queue.py` transfers events from the synchronous tracker to the async
    worker and batches up to 8 events with a 3-second collection wait.
-4. `llm_worker.py` persists events, caches crop JPEGs before any LLM request,
-   clears thumbnail/description cache entries on exit, and asks for descriptions
-   only for stable or appearance-changed events.
-5. `llm_request.py` sends crop data through OpenRouter using the configured
-   model and returns descriptions for a batch. HTTP 429 errors trigger a short
-   pause; failed batches are not retried.
-6. `storage.py` stores event and description metadata in `precept.db` using
+4. `tracker_pipeline.py` encodes event crops and updates the in-memory
+   `thumbnails.py` cache on the tracker thread, independently of LLM latency.
+   It tracks the current in-memory active track IDs; exits clear their thumbs.
+5. `llm_worker.py` persists events, requests descriptions only for stable or
+   appearance-changed events, then stores successful descriptions and queues
+   narration. It processes batches serially, so provider retries can delay later
+   event persistence and descriptions, but do not block tracking/video.
+6. `llm_request.py` sends crop data to Groq using `qwen/qwen3.8-27b`, streams
+   completion text, caps completion tokens at 256, and splits calls into groups
+   of at most 3 images to respect the model limit. Groq rate-limit retries may
+   still delay processing; a batch that ultimately fails is skipped.
+7. `storage.py` stores event and description metadata in `precept.db` using
    SQLite WAL mode. The path is relative to the process working directory.
-7. `tts_narrator.py` uses `pyttsx3` in a background thread so speech does not
+8. `tts_narrator.py` uses `pyttsx3` in a background thread so speech does not
    block tracking or the LLM request loop.
 
 ## Dashboard
@@ -52,7 +57,8 @@ stop the process to shut down the app.
 `interface/dashboard.py` serves `interface/static/` and provides:
 
 - `/api/status` — dashboard health and update timestamp
-- `/api/scene` — active tracks and latest descriptions
+- `/api/scene` — database-backed active tracks filtered against the tracker's
+  current in-memory active IDs, with latest descriptions
 - `/api/stats` — today's event totals and hourly activity
 - `/api/visits` — recent completed track visits
 - `/thumb/{track_id}` — current in-memory JPEG crop, or 404 when unavailable
@@ -71,16 +77,21 @@ connection, loading, and feed-error states. It builds DOM content with
 CSS explicitly honors `[hidden]` so hidden loading/error overlays do not cover
 a successfully loaded frame.
 
-Thumbnails are in memory, not SQLite or disk. They are cached from event crops
-before requesting an LLM description, so an LLM failure does not prevent a
-thumbnail for an event from being available. Thumbnails disappear when a track
-exits or the app process restarts.
+Thumbnails are in memory, not SQLite or disk. The tracker caches crop JPEGs
+when crop-bearing lifecycle events are emitted, independently of the LLM worker,
+so provider delays do not delay thumbnail availability. Exited tracks are
+removed from both the thumbnail cache and the live active-track set. The
+dashboard filters persisted scene rows through that live set to avoid showing
+stale tracks whose exit event is waiting in the worker queue. Thumbnail URLs
+are served with `Cache-Control: no-store`; the browser shows a "NO CROP"
+placeholder on 404. The cache is not persistent across process restarts.
+
+Recent Visits currently stores and displays text metadata/descriptions only;
+visit crop snapshots are not saved, so there is no durable visual history.
 
 ## Current caveats
 
-There is no automated test suite checked into this repository snapshot at the
-moment. The earlier note about `tests/test_dashboard.py` is stale and should not
-be treated as part of the current codebase.
+There is no automated test suite checked into this repository snapshot.
 
 Use the venv interpreter consistently. During troubleshooting,
 `E:/Python Installation/python.exe` failed to import `pyttsx3` (and later
@@ -95,7 +106,8 @@ limits.
 - `tracker_pipeline.py` — YOLO frame loop and frame publication
 - `frame_bus.py` — latest encoded frame shared with the web server
 - `debounce.py`, `track_events.py`, `event_queue.py` — event state and handoff
-- `llm_worker.py`, `llm_request.py` — crop cache, LLM batching, descriptions
+- `llm_worker.py`, `llm_request.py` — event processing, Groq image batching,
+  descriptions
 - `storage.py` — SQLite reads and writes
 - `thumbnails.py`, `tts_narrator.py` — in-memory crops and speech output
 - `interface/dashboard.py` — FastAPI routes and MJPEG response
