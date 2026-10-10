@@ -1,5 +1,10 @@
 # Vision + LLM Object Tracking — Event-Driven Scaffold
 
+> **Current source of truth:** This document began as a scaffold and contains
+> historical notes that no longer describe the running application. Use the
+> latest dated addendum at the bottom for current behavior; older sections are
+> retained as design history unless explicitly updated there.
+
 ## Flow
 
 ```
@@ -258,7 +263,7 @@ to deduplicate requests.
 7. Before long-running storage use, add schema migrations, retention policy,
    indexes, and an explicit configurable database path.
 
-## Current Implementation Addendum (2026-10-07)
+## Current Implementation Addendum (2026-10-07, superseded)
 
 This update supersedes dashboard, storage, and thumbnail statements in the
 2026-10-06 addendum where they conflict with the current source.
@@ -288,10 +293,9 @@ This update supersedes dashboard, storage, and thumbnail statements in the
 
 ### Thumbnails, persistence, and narration
 
-- `llm_worker.py` caches each event crop as a quality-70 JPEG before making an
-  LLM request. `/thumb/{track_id}` serves that in-memory thumbnail. This keeps
-  thumbnails independent of LLM success; the cache is cleared on track exit
-  and is not persistent across process restarts.
+- At this point in the project, `llm_worker.py` cached event crops before an
+  LLM request. This behavior was later moved to the tracker; see the current
+  addendum below.
 - Events and descriptions are stored in `precept.db` by `storage.py`, using
   SQLite WAL mode. The database path is relative to the process working
   directory. The JSONL log files mentioned in older notes are not the current
@@ -306,10 +310,9 @@ This update supersedes dashboard, storage, and thumbnail statements in the
   `python main.py --source 0 --visualize`. The system Python at
   `E:/Python Installation/python.exe` did not have the app dependencies during
   troubleshooting, even though the project venv did.
-- `tests/test_dashboard.py` covers dashboard health/markup and includes an
-  MJPEG response test. The tests were not run during this update at the user's
-  request. A system-Python test attempt failed because that interpreter lacked
-  FastAPI; use the project venv for any future test run.
+- The test-suite note in this historical addendum is stale. There is no
+  automated test suite in the current repository snapshot.
 - A smoother dashboard transport does not speed up YOLO inference. If the
   stream still stutters, measure tracker FPS and then consider model size,
   input resolution, or inference device.
+
