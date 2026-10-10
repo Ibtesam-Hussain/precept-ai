@@ -316,3 +316,54 @@ This update supersedes dashboard, storage, and thumbnail statements in the
   stream still stutters, measure tracker FPS and then consider model size,
   input resolution, or inference device.
 
+## Current Implementation Addendum (2026-10-10)
+
+This addendum supersedes prior provider, worker, thumbnail, active-scene, and
+test-suite descriptions where they conflict with current source.
+
+### Groq vision requests and throughput
+
+- `llm_request.py` uses the Groq SDK with `qwen/qwen3.8-27b`. The prior
+  OpenRouter client/request remains commented in the source as a reference.
+- Each request contains at most 3 images because this Groq model reports a
+  maximum of 3 images per request. Larger worker batches are split into
+  sequential requests of 3 or fewer images.
+- Requests stream their response and cap `max_completion_tokens` at 256. The
+  previous 2048-token reservation exceeded the observed 1000 output-tokens-per-
+  minute quota. Provider 429s can still cause long SDK retry delays; reducing
+  image count and token reservation does not guarantee quota headroom.
+- `LLMWorker` processes batches sequentially and waits for descriptions before
+  taking the next batch. Events are persisted before the request for their
+  current batch, but events arriving during a long provider retry wait in the
+  queue and are not persisted until the worker resumes. This makes the LLM path
+  the current throughput bottleneck; tracker and video work run separately.
+- Only `track_stable` and `track_appearance_changed` events trigger vision
+  requests. `track_new` and `track_exited` are persisted but do not request
+  descriptions.
+
+### Live thumbnails and active targets
+
+- The tracker now JPEG-encodes crop-bearing lifecycle events and stores them in
+  `thumbnails.py` directly, independent of the LLM queue. Track exits clear the
+  corresponding thumbnail. Thumbnails are in-memory only and are not retained
+  after process restart.
+- The tracker publishes its current active track IDs in memory. `/api/scene`
+  filters SQLite's latest non-exited track rows against those IDs, preventing
+  tracks still awaiting a delayed exit-event write from appearing as active.
+- `/thumb/{track_id}` sets `Cache-Control: no-store`. The dashboard provides a
+  "NO CROP" placeholder when a thumbnail is unavailable; it should not show a
+  broken-image icon. A missing crop can still return 404 if no crop has yet
+  been emitted or encoded for that track.
+- Recent Visits currently provides textual visit metadata and descriptions.
+  Visit snapshots are not durably stored, so a persistent visual history has
+  not yet been implemented.
+
+### Confirmed operating observations and repository status
+
+- During the 2026-10-10 run, the user confirmed YOLO tracking, the dashboard's
+  live video feed, and database event recording were working as expected. The
+  remaining observed bottleneck was Groq description throughput/rate limiting.
+- There is no automated test suite checked into the current repository
+  snapshot. Syntax checks and `git diff --check` were used for the recent
+  Groq/thumbnail changes; no live Groq API test was run as part of those edits.
+
