@@ -49,8 +49,12 @@ def visits():
 def thumb(track_id: int):
     data = thumbnails.get_thumb(track_id)
     if data is None:
-        return Response(status_code=404)
-    return Response(content=data, media_type="image/jpeg")
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def stream_video():
