@@ -3,7 +3,9 @@ import cv2
 from ultralytics import YOLO
 from debounce import TrackStateManager
 from event_queue import EventBridge
+from track_events import EventType
 import frame_bus
+import thumbnails
 
 
 def run_tracker(source, bridge: EventBridge, model_path="yolo26n.pt", visualize=False):
@@ -27,7 +29,8 @@ def run_tracker(source, bridge: EventBridge, model_path="yolo26n.pt", visualize=
 
         if result.boxes is None or result.boxes.id is None:
             for ev in state_mgr.sweep_exits(frame_idx):
-                bridge.put(ev)
+                _publish_event(ev, bridge)
+            thumbnails.set_active_track_ids(state_mgr.tracks)
             continue
 
         boxes = result.boxes
@@ -44,10 +47,24 @@ def run_tracker(source, bridge: EventBridge, model_path="yolo26n.pt", visualize=
                 track_id=track_id, class_name=class_name, bbox=(x1, y1, x2, y2),
                 confidence=float(conf), crop=crop, frame_idx=frame_idx,
             ):
-                bridge.put(ev)
+                _publish_event(ev, bridge)
 
         for ev in state_mgr.sweep_exits(frame_idx):
-            bridge.put(ev)
+            _publish_event(ev, bridge)
+        thumbnails.set_active_track_ids(state_mgr.tracks)
+
+
+def _publish_event(event, bridge: EventBridge) -> None:
+    if event.event_type == EventType.TRACK_EXITED:
+        thumbnails.clear_thumb(event.track_id)
+    elif event.crop is not None:
+        ok, buf = cv2.imencode(
+            ".jpg", event.crop, [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+        )
+        if ok:
+            thumbnails.set_thumb(event.track_id, buf.tobytes())
+
+    bridge.put(event)
 
 
 def _extract_crop(frame, bbox):
