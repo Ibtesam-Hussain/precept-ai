@@ -3,36 +3,18 @@ SQLite storage for events and descriptions. Replaces the JSONL files.
 Uses WAL mode so the dashboard can read concurrently while the pipeline writes.
 """
 
-import ast
-from dataclasses import dataclass
 import sqlite3
 import threading
 import time
 import datetime
-from typing import List, Optional
-
-import cv2
-import numpy as np
-
-from track_events import EventType, TrackEvent
 
 DB_PATH = "precept.db"
-MAX_DESCRIPTION_ATTEMPTS = 5
-RETRY_BASE_DELAY_SECONDS = 5
-RETRY_MAX_DELAY_SECONDS = 300
 _lock = threading.Lock()
-
-
-@dataclass(frozen=True)
-class DescriptionJob:
-    job_id: int
-    event: TrackEvent
 
 
 def _connect():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
 
@@ -60,293 +42,22 @@ def init_db():
                 event_type TEXT,
                 class_name TEXT,
                 description TEXT,
-                timestamp REAL,
-                event_id INTEGER REFERENCES events(id)
+                timestamp REAL
             )
-        """)
-        description_columns = {
-            row[1] for row in _conn.execute("PRAGMA table_info(descriptions)")
-        }
-        if "event_id" not in description_columns:
-            _conn.execute(
-                "ALTER TABLE descriptions "
-                "ADD COLUMN event_id INTEGER REFERENCES events(id)"
-            )
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS description_jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id INTEGER NOT NULL UNIQUE REFERENCES events(id),
-                crop_jpeg BLOB,
-                status TEXT NOT NULL CHECK (
-                    status IN ('pending', 'in_progress', 'done', 'failed')
-                ),
-                attempts INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-        job_columns = {
-            row[1]
-            for row in _conn.execute("PRAGMA table_info(description_jobs)")
-        }
-        if "next_attempt_at" not in job_columns:
-            _conn.execute(
-                "ALTER TABLE description_jobs "
-                "ADD COLUMN next_attempt_at REAL NOT NULL DEFAULT 0"
-            )
-        _conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_description_jobs_status
-            ON description_jobs(status, next_attempt_at, id)
         """)
         _conn.commit()
 
 
-def _encode_description_crop(crop) -> Optional[bytes]:
-    if crop is None:
-        return None
-
-    height, width = crop.shape[:2]
-    scale = min(384 / max(height, width), 1.0)
-    if scale < 1.0:
-        crop = cv2.resize(
-            crop,
-            (max(1, int(width * scale)), max(1, int(height * scale))),
-            interpolation=cv2.INTER_AREA,
-        )
-
-    ok, encoded = cv2.imencode(
-        ".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-    )
-    return encoded.tobytes() if ok else None
-
-
-def persist_event(event: TrackEvent) -> None:
-    """Persist an event and, when relevant, its description job atomically."""
-    description_event = event.event_type in (
-        EventType.TRACK_STABLE,
-        EventType.TRACK_APPEARANCE_CHANGED,
-    )
-    crop_jpeg = _encode_description_crop(event.crop) if description_event else None
-    job_status = "pending" if crop_jpeg is not None else "failed"
-    job_error = None if crop_jpeg is not None else "No valid crop available"
-    now = time.time()
-
+def insert_event(e) -> None:
+    """e is a TrackEvent."""
     with _lock:
-        with _conn:
-            cursor = _conn.execute(
-                "INSERT INTO events (track_id, event_type, class_name, bbox, confidence, frame_idx, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    event.track_id,
-                    event.event_type.value,
-                    event.class_name,
-                    str(event.bbox),
-                    event.confidence,
-                    event.frame_idx,
-                    event.timestamp,
-                ),
-            )
-            if description_event:
-                _conn.execute(
-                    "INSERT INTO description_jobs "
-                    "(event_id, crop_jpeg, status, last_error, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        cursor.lastrowid,
-                        crop_jpeg,
-                        job_status,
-                        job_error,
-                        now,
-                        now,
-                    ),
-                )
-
-
-def recover_interrupted_description_jobs() -> int:
-    """Requeue jobs left in progress by a previous process run."""
-    with _lock, _conn:
-        now = time.time()
         _conn.execute(
-            "UPDATE description_jobs "
-            "SET status = 'failed', last_error = 'Maximum attempts exceeded', "
-            "updated_at = ? "
-            "WHERE status = 'in_progress' AND attempts >= ?",
-            (now, MAX_DESCRIPTION_ATTEMPTS),
+            "INSERT INTO events (track_id, event_type, class_name, bbox, confidence, frame_idx, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (e.track_id, e.event_type.value, e.class_name, str(e.bbox),
+             e.confidence, e.frame_idx, e.timestamp),
         )
-        cursor = _conn.execute(
-            "UPDATE description_jobs "
-            "SET status = 'pending', last_error = NULL, next_attempt_at = 0, "
-            "updated_at = ? "
-            "WHERE status = 'in_progress' AND attempts < ?",
-            (now, MAX_DESCRIPTION_ATTEMPTS),
-        )
-        return cursor.rowcount
-
-
-def claim_description_jobs(limit: int = 8) -> List[DescriptionJob]:
-    """Atomically claim pending jobs and reconstruct their TrackEvents."""
-    if limit <= 0:
-        return []
-
-    with _lock:
-        try:
-            _conn.execute("BEGIN IMMEDIATE")
-            rows = _conn.execute(
-                """
-                SELECT j.id, j.crop_jpeg, e.track_id, e.event_type,
-                       e.class_name, e.bbox, e.confidence, e.frame_idx,
-                       e.timestamp
-                FROM description_jobs j
-                JOIN events e ON e.id = j.event_id
-                WHERE j.status = 'pending' AND j.next_attempt_at <= ?
-                ORDER BY j.id
-                LIMIT ?
-                """,
-                (time.time(), limit),
-            ).fetchall()
-            if rows:
-                job_ids = [row[0] for row in rows]
-                placeholders = ",".join("?" for _ in job_ids)
-                _conn.execute(
-                    f"UPDATE description_jobs "
-                    f"SET status = 'in_progress', attempts = attempts + 1, "
-                    f"updated_at = ? WHERE id IN ({placeholders})",
-                    (time.time(), *job_ids),
-                )
-            _conn.commit()
-        except Exception:
-            _conn.rollback()
-            raise
-
-    jobs = []
-    for row in rows:
-        (
-            job_id,
-            crop_jpeg,
-            track_id,
-            event_type,
-            class_name,
-            bbox,
-            confidence,
-            frame_idx,
-            timestamp,
-        ) = row
-        if crop_jpeg is None:
-            fail_description_jobs([job_id], "Stored crop is missing")
-            continue
-        crop = cv2.imdecode(
-            np.frombuffer(crop_jpeg, dtype=np.uint8),
-            cv2.IMREAD_COLOR,
-        )
-        if crop is None:
-            fail_description_jobs(
-                [job_id],
-                "Stored crop JPEG could not be decoded",
-            )
-            continue
-
-        jobs.append(DescriptionJob(
-            job_id=job_id,
-            event=TrackEvent(
-                track_id=track_id,
-                event_type=EventType(event_type),
-                class_name=class_name,
-                bbox=ast.literal_eval(bbox),
-                confidence=confidence,
-                frame_idx=frame_idx,
-                crop=crop,
-                timestamp=timestamp,
-            ),
-        ))
-
-    return jobs
-
-
-def complete_description_job(job_id: int, event: TrackEvent, description: str) -> None:
-    now = time.time()
-    with _lock, _conn:
-        job = _conn.execute(
-            "SELECT event_id FROM description_jobs "
-            "WHERE id = ? AND status = 'in_progress'",
-            (job_id,),
-        ).fetchone()
-        if job is None:
-            raise RuntimeError(f"Description job {job_id} is not in progress")
-
-        cursor = _conn.execute(
-            "UPDATE description_jobs "
-            "SET status = 'done', last_error = NULL, updated_at = ? "
-            "WHERE id = ? AND status = 'in_progress'",
-            (now, job_id),
-        )
-        if cursor.rowcount != 1:
-            raise RuntimeError(f"Description job {job_id} is not in progress")
-        _conn.execute(
-            "INSERT INTO descriptions "
-            "(track_id, event_type, class_name, description, timestamp, event_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                event.track_id,
-                event.event_type.value,
-                event.class_name,
-                description,
-                now,
-                job[0],
-            ),
-        )
-
-
-def fail_description_jobs(
-    job_ids: List[int],
-    error: str,
-    retryable: bool = False,
-    retry_after_seconds: Optional[float] = None,
-) -> tuple[int, int]:
-    if not job_ids:
-        return 0, 0
-
-    retrying = 0
-    failed = 0
-    now = time.time()
-    with _lock:
-        with _conn:
-            for job_id in job_ids:
-                row = _conn.execute(
-                    "SELECT attempts FROM description_jobs "
-                    "WHERE id = ? AND status = 'in_progress'",
-                    (job_id,),
-                ).fetchone()
-                if row is None:
-                    continue
-
-                attempts = row[0]
-                should_retry = retryable and attempts < MAX_DESCRIPTION_ATTEMPTS
-                if should_retry:
-                    backoff = min(
-                        RETRY_BASE_DELAY_SECONDS * (2 ** (attempts - 1)),
-                        RETRY_MAX_DELAY_SECONDS,
-                    )
-                    if retry_after_seconds is not None:
-                        backoff = max(backoff, retry_after_seconds)
-                    _conn.execute(
-                        "UPDATE description_jobs "
-                        "SET status = 'pending', last_error = ?, "
-                        "next_attempt_at = ?, updated_at = ? "
-                        "WHERE id = ? AND status = 'in_progress'",
-                        (error, now + backoff, now, job_id),
-                    )
-                    retrying += 1
-                else:
-                    _conn.execute(
-                        "UPDATE description_jobs "
-                        "SET status = 'failed', last_error = ?, updated_at = ? "
-                        "WHERE id = ? AND status = 'in_progress'",
-                        (error, now, job_id),
-                    )
-                    failed += 1
-
-    return retrying, failed
+        _conn.commit()
 
 
 def insert_description(track_id, event_type, class_name, description, timestamp=None) -> None:
@@ -457,64 +168,30 @@ def get_track_visits(limit=20):
     (track_new -> ... -> track_exited), not one row per raw event."""
     with _lock:
         ev_cur = _conn.execute(
-            "SELECT id, track_id, event_type, class_name, timestamp FROM events "
+            "SELECT track_id, event_type, class_name, timestamp FROM events "
             "ORDER BY id DESC LIMIT 300"
         )
         events = list(reversed(ev_cur.fetchall()))
 
         desc_cur = _conn.execute(
-            "SELECT track_id, description, timestamp, event_id FROM descriptions "
+            "SELECT track_id, description, timestamp FROM descriptions "
             "ORDER BY id DESC LIMIT 300"
         )
         descriptions = list(reversed(desc_cur.fetchall()))
 
-    descriptions_by_event = {}
-    legacy_descriptions_by_track = {}
-    for track_id, description, ts, event_id in descriptions:
-        if event_id is not None:
-            descriptions_by_event.setdefault(event_id, []).append(description)
-        else:
-            legacy_descriptions_by_track.setdefault(track_id, []).append(
-                (ts, description)
-            )
+    desc_by_track = {}
+    for track_id, description, ts in descriptions:
+        desc_by_track.setdefault(track_id, []).append((ts, description))
 
     visits = []
     open_visits = {}
 
-    for event_id, track_id, event_type, class_name, ts in events:
+    for track_id, event_type, class_name, ts in events:
         if event_type == "track_new":
-            open_visits[track_id] = {
-                "start": ts,
-                "start_event_id": event_id,
-                "class_name": class_name,
-            }
+            open_visits[track_id] = {"start": ts, "class_name": class_name}
         elif event_type == "track_exited" and track_id in open_visits:
             v = open_visits.pop(track_id)
-            narrative = []
-            for (
-                description_event_id,
-                event_track_id,
-                description_event_type,
-                _,
-                _,
-            ) in events:
-                if (
-                    event_track_id == track_id
-                    and v["start_event_id"] <= description_event_id < event_id
-                    and description_event_type in (
-                        "track_stable",
-                        "track_appearance_changed",
-                    )
-                ):
-                    narrative.extend(
-                        descriptions_by_event.get(description_event_id, [])
-                    )
-            narrative.extend(
-                description
-                for description_ts, description in
-                legacy_descriptions_by_track.get(track_id, [])
-                if v["start"] <= description_ts <= ts
-            )
+            narrative = [d for (dts, d) in desc_by_track.get(track_id, []) if v["start"] <= dts <= ts]
             visits.append({
                 "track_id": track_id,
                 "class_name": v["class_name"],

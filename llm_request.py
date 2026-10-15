@@ -1,8 +1,10 @@
+import os
 import asyncio
 import base64
 import cv2
 from typing import List
 from groq import Groq
+from openai import OpenAI
 from dotenv import load_dotenv
 
 from track_events import TrackEvent
@@ -13,11 +15,9 @@ load_dotenv()
 MAX_IMAGES_PER_REQUEST = 3
 MAX_COMPLETION_TOKENS = 256
 
-client = Groq(max_retries=0)
+client = Groq()
 
 # OpenRouter client retained for switching back if needed:
-# import os
-# from openai import OpenAI
 # openrouter_client = OpenAI(
 #     base_url="https://openrouter.ai/api/v1",
 #     api_key=os.environ.get("OPENROUTER_API_KEY"),

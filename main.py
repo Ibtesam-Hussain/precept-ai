@@ -6,7 +6,7 @@ import uvicorn
 
 from event_queue import EventBridge
 from tracker_pipeline import run_tracker
-from llm_worker import EventIngestor, LLMWorker
+from llm_worker import LLMWorker
 from interface.dashboard import app as dashboard_app
 
 
@@ -33,15 +33,7 @@ def main():
 
     print(f"Dashboard: http://localhost:{args.dashboard_port}")
 
-    async def run_workers():
-        ingestor = EventIngestor(bridge)
-        llm_worker = LLMWorker()
-        await asyncio.gather(
-            ingestor.run_forever(),
-            llm_worker.run_forever(),
-        )
-
-    asyncio.run(run_workers())
+    asyncio.run(LLMWorker(bridge).run_forever())
 
 
 if __name__ == "__main__":
