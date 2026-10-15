@@ -333,10 +333,11 @@ test-suite descriptions where they conflict with current source.
   minute quota. Provider 429s can still cause long SDK retry delays; reducing
   image count and token reservation does not guarantee quota headroom.
 - `LLMWorker` processes batches sequentially and waits for descriptions before
-  taking the next batch. Events are persisted before the request for their
-  current batch, but events arriving during a long provider retry wait in the
-  queue and are not persisted until the worker resumes. This makes the LLM path
-  the current throughput bottleneck; tracker and video work run separately.
+  taking the next description batch. Event persistence is now handled by the
+  separate `EventIngestor`, so events arriving during a long provider retry
+  wait are still written to SQLite promptly. This keeps the LLM path as the
+  description-throughput bottleneck without delaying event ingestion; tracker
+  and video work run separately.
 - Only `track_stable` and `track_appearance_changed` events trigger vision
   requests. `track_new` and `track_exited` are persisted but do not request
   descriptions.
@@ -357,6 +358,12 @@ test-suite descriptions where they conflict with current source.
 - Recent Visits currently provides textual visit metadata and descriptions.
   Visit snapshots are not durably stored, so a persistent visual history has
   not yet been implemented.
+- New descriptions are associated with the exact event row (`descriptions.event_id`)
+  that created their durable job. Visit narratives are grouped by lifecycle
+  event IDs rather than description-arrival timestamps, so rate-limited
+  responses completed after a track exit still appear in that visit. Historical
+  descriptions predating this association use timestamp-based fallback and
+  cannot always be matched if they arrived after exit.
 
 ### Confirmed operating observations and repository status
 
@@ -367,3 +374,25 @@ test-suite descriptions where they conflict with current source.
   snapshot. Syntax checks and `git diff --check` were used for the recent
   Groq/thumbnail changes; no live Groq API test was run as part of those edits.
 
+## Event Ingestion Decoupling and Retry Policy (2026-10-15)
+
+- `EventBridge.get_event()` transfers one tracker event at a time to the async
+  ingestion path rather than collecting a batch before persistence.
+- `EventIngestor` in `llm_worker.py` persists every event to SQLite immediately.
+- `storage.py` persists description jobs and their resized JPEG crops in SQLite
+  atomically with the corresponding event. Only `track_stable` and
+  `track_appearance_changed` events create description jobs; `track_new` and
+  `track_exited` are persisted without them.
+- `main.py` starts `EventIngestor` and `LLMWorker` as concurrent asyncio tasks.
+  The LLM worker claims pending jobs as `in_progress` and batches up to 8,
+  independently of event persistence.
+- Successful jobs are completed transactionally with their description and
+  marked `done`. Retryable provider failures are rescheduled as `pending` with
+  persisted exponential backoff, honoring numeric `Retry-After` headers.
+  Non-retryable failures and jobs reaching the five-attempt limit are marked
+  `failed` with their error. The Groq SDK's internal retries are disabled so
+  this database-backed policy controls retries.
+- Jobs abandoned as `in_progress` return to `pending` on startup if attempts
+  remain; jobs already at the limit become `failed`. Retry delays and attempts
+  survive restarts. The SQLite job table stores crop JPEG BLOBs, which
+  increases database size; retention/cleanup policy remains future work.
