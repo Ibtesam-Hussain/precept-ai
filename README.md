@@ -8,12 +8,12 @@
 
 <br>
 
-![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Python](https://www.python.org/)
 ![YOLO](https://img.shields.io/badge/YOLO-Ultralytics-00FFFF?style=for-the-badge)
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
-![Groq](https://img.shields.io/badge/LLM-Groq-F55036?style=for-the-badge)
-![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white)
+![FastAPI](https://docs.ultralytics.com/)
+![SQLite](https://www.sqlite.org/)
+![Groq](https://groq.com/)
+![OpenCV](https://opencv.org/)
 
 <br>
 
