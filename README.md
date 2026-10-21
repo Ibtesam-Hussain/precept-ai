@@ -1,6 +1,6 @@
 <div align="center">
 
-# PRECEPT
+# PRECEPT-AI
 
 ### Vision intelligence console: real-time object tracking, narrated by an LLM
 
