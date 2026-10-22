@@ -221,6 +221,11 @@ elements.liveFeed.addEventListener("error", () => {
   setStatus("is-offline", "Video offline");
 });
 
+// If the first frame arrived before this script attached its listeners, replay the load event.
+if (elements.liveFeed.complete && elements.liveFeed.naturalWidth > 0) {
+  elements.liveFeed.dispatchEvent(new Event("load"));
+}
+
 setInterval(updateClock, 1000);
 setInterval(refreshAll, 5000);
 setInterval(refreshStatus, 15000);
