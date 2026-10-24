@@ -45,6 +45,12 @@
         </div>
         <div class="classification" id="classification">CAM-01 // LIVE FEED</div>
         <div class="header-meta">
+          <div class="health" id="health" role="group" aria-label="System health">
+            <div class="chip" data-state="dim" id="chip-fps"><span class="chip-k">FPS</span><span class="chip-v" id="h-fps">--</span></div>
+            <div class="chip" data-state="dim" id="chip-llm"><span class="chip-k">LLM</span><span class="chip-v" id="h-llm">--</span></div>
+            <div class="chip" data-state="dim" id="chip-queue"><span class="chip-k">QUEUE</span><span class="chip-v" id="h-queue">--</span></div>
+            <div class="chip" data-state="dim" id="chip-jobs"><span class="chip-k">JOBS</span><span class="chip-v" id="h-jobs">--</span></div>
+          </div>
           <div id="connection-status" class="connection-status is-loading" role="status" aria-live="polite">
             <span class="status-dot"></span>
             <span id="connection-label">Connecting</span>
@@ -118,5 +124,6 @@
 
 <script src="/static/app.js"></script>
 <script src="/static/hud.js"></script>
+<script src="/static/health.js"></script>
 </body>
 </html>
