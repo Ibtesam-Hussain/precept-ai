@@ -1,11 +1,13 @@
 import asyncio
 import base64
 import cv2
+import time
 from typing import List
 from groq import Groq
 from dotenv import load_dotenv
 
 from track_events import TrackEvent
+import runtime_stats
 
 # Load environment variables from .env file
 load_dotenv()
@@ -97,7 +99,9 @@ async def describe_batch_cheap(events: List[TrackEvent]) -> List[str]:
         #     messages=[{"role": "user", "content": content}],
         # )
         # text = response.choices[0].message.content.strip()
+        started = time.perf_counter()
         text = (await asyncio.to_thread(request_descriptions)).strip()
+        runtime_stats.record_llm_latency(time.perf_counter() - started)
 
         lines = [line.strip() for line in text.split("\n") if line.strip()]
         while len(lines) < len(batch):
