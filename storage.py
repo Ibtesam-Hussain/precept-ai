@@ -386,6 +386,31 @@ def get_recent_events(limit=50):
     ]
 
 
+def get_job_counts():
+    """Return description-job counts grouped by lifecycle and retry state."""
+    with _lock:
+        row = _conn.execute("""
+            SELECT
+                COALESCE(SUM(CASE
+                    WHEN status = 'pending' AND attempts = 0 THEN 1
+                    ELSE 0
+                END), 0),
+                COALESCE(SUM(CASE
+                    WHEN status NOT IN ('done', 'failed') AND attempts > 0 THEN 1
+                    ELSE 0
+                END), 0),
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0)
+            FROM description_jobs
+        """).fetchone()
+    return {
+        "pending": row[0],
+        "retrying": row[1],
+        "failed": row[2],
+        "done": row[3],
+    }
+
+
 def get_latest_description(track_id):
     with _lock:
         cur = _conn.execute(
