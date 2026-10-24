@@ -1,12 +1,14 @@
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import frame_bus
+import runtime_stats
 import storage
 import thumbnails
 
@@ -23,6 +25,29 @@ def status():
         "status": "ok",
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/api/system")
+def system():
+    latency_ms = runtime_stats.get_llm_latency_ms()
+    return JSONResponse(
+        content={
+            "fps": runtime_stats.get_fps(),
+            "llm_latency_ms": None if latency_ms is None else round(latency_ms),
+            "jobs": storage.get_job_counts(),
+            "uptime_s": round(time.monotonic() - runtime_stats.started_at),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/tracks")
+def tracks():
+    return JSONResponse(
+        content=runtime_stats.get_tracks_snapshot(),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/scene")
