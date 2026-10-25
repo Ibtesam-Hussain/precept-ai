@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--source", default="0")
     parser.add_argument("--model", default="yolo26n.pt")
     parser.add_argument("--visualize", action="store_true")
+    parser.add_argument("--burn-boxes", action="store_true")
     parser.add_argument("--dashboard-port", type=int, default=8000)
 
     args = parser.parse_args()
@@ -28,7 +29,11 @@ def main():
 
     bridge = EventBridge()
 
-    threading.Thread(target=run_tracker, args=(source, bridge, args.model, args.visualize), daemon=True).start()
+    threading.Thread(
+        target=run_tracker,
+        args=(source, bridge, args.model, args.visualize, args.burn_boxes),
+        daemon=True,
+    ).start()
     threading.Thread(target=start_dashboard, args=(args.dashboard_port,), daemon=True).start()
 
     print(f"Dashboard: http://localhost:{args.dashboard_port}")

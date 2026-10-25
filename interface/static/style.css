@@ -128,6 +128,29 @@ button, input, select { font: inherit; }
 .session-panel  { flex: 0 0 auto; }
 .scene-panel    { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
+/* ---------- Layer groups ---------- */
+.group-title { margin: 2px 0 4px; color: var(--text-dim); font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; }
+.group-title:not(:first-child) { margin-top: 10px; }
+.layer-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
+.layer-grid .layer { padding: 6px 2px; font-size: 11.5px; gap: 7px; }
+.layer-grid .layer .ic { width: 14px; }
+.layer-grid .sw { width: 24px; }
+.layer-grid .layer input:checked + .sw::after { transform: translateX(10px); }
+
+/* ---------- Live overlay + enriched target cards ---------- */
+.overlay-canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+.scene-item { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.scene-item:hover { border-color: rgba(95, 212, 255, 0.4); }
+.scene-item:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.scene-item.is-selected { border-color: rgba(255, 178, 62, 0.75); box-shadow: 0 0 18px rgba(255, 178, 62, 0.16); }
+.scene-details { flex: 1; }
+.scene-header { flex-wrap: wrap; }
+.status-chip { margin-left: auto; padding: 0 6px; border-radius: 4px; font-size: 9px; font-weight: 700; line-height: 15px; letter-spacing: 0.06em; }
+.status-chip[data-kind="stable"]  { background: #0f3a28; color: var(--success); }
+.status-chip[data-kind="new"]     { background: #0d3347; color: var(--hud); }
+.status-chip[data-kind="changed"] { background: #3d2c08; color: var(--amber); }
+.scene-meta { display: flex; justify-content: space-between; margin-top: 5px; color: var(--text-dim); font-size: 10px; letter-spacing: 0.06em; }
+
 /* ---------- Targets ---------- */
 .scene-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; scrollbar-color: var(--line) transparent; }
 .scene-item { display: flex; gap: 11px; align-items: center; margin-bottom: 8px; padding: 9px; border: 1px solid rgba(95, 212, 255, 0.14); border-radius: 10px; background: rgba(4, 12, 20, 0.55); }

@@ -1,6 +1,6 @@
 # Precept AI — Current Project Context
 
-Last updated: 2026-10-15. This file reflects the current repository snapshot;
+Last updated: 2026-10-25. This file reflects the current repository snapshot;
 use it instead of older scaffold notes that may describe removed behavior.
 
 ## Purpose
@@ -17,20 +17,28 @@ the same environment:
 
 ```powershell
 .\venv\Scripts\Activate.ps1
-python main.py --source 0 --visualize
+python main.py --source 0
 ```
 
 The default dashboard is at `http://localhost:8000`. `main.py` accepts
-`--source`, `--model`, `--visualize`, and `--dashboard-port`. It starts the
-tracker and Uvicorn dashboard on background threads, then runs the async event
-ingestor and LLM worker concurrently in the main thread. Press `q` in the
-OpenCV window to stop visualization; stop the process to shut down the app.
+`--source`, `--model`, `--visualize`, `--burn-boxes`, and `--dashboard-port`.
+The default publishes a clean camera frame for the browser HUD; add
+`--burn-boxes` to burn YOLO annotations into the published video. `--visualize`
+opens the annotated OpenCV debug window and is not needed for the dashboard.
+The app starts the tracker and Uvicorn dashboard on background threads, then
+runs the async event ingestor and LLM worker concurrently in the main thread.
+Press `q` in the OpenCV window to stop visualization; stop the process to stop
+the app.
 
 ## Runtime architecture
 
 1. `tracker_pipeline.py` loads YOLO and consumes frames with persistent track
-   IDs. It publishes annotated quality-70 JPEGs to `frame_bus.py`, extracts
-   object crops, and sends lifecycle events to `EventBridge`.
+   IDs. By default it publishes the original clean frame as a quality-70 JPEG
+   to `frame_bus.py`; `--burn-boxes` selects the annotated frame instead.
+   Annotation is skipped when neither burn-boxes nor visualization needs it.
+   The tracker also publishes a latest-only snapshot of visible tracks with
+   boxes normalized to the published frame, extracts object crops, and sends
+   lifecycle events to `EventBridge`.
 2. `debounce.py` emits `TRACK_NEW`, `TRACK_STABLE`,
    `TRACK_APPEARANCE_CHANGED`, and `TRACK_EXITED` as track state changes are
    detected across frames.
@@ -65,6 +73,10 @@ OpenCV window to stop visualization; stop the process to shut down the app.
 `interface/dashboard.py` serves `interface/static/` and provides:
 
 - `/api/status` — dashboard health and update timestamp
+- `/api/system` — tracker FPS, recent successful LLM latency, description-job
+  counts, uptime, and update timestamp
+- `/api/tracks` — latest tracker frame sequence, dimensions, timestamp, and
+  visible normalized tracks
 - `/api/scene` — database-backed active tracks filtered against the tracker's
   current in-memory active IDs, with latest descriptions
 - `/api/stats` — today's event totals and hourly activity
@@ -78,12 +90,18 @@ at up to 30 Hz and emits only when the tracker has published a different JPEG.
 This removes the old one-snapshot-per-second browser polling, but does not
 increase YOLO's inference rate.
 
-The static dashboard uses an `<img>` connected once to `/video`. JavaScript
-refreshes scene, statistics, and visits every five seconds and reports
-connection, loading, and feed-error states. It builds DOM content with
-`textContent` instead of interpolating dynamic strings as HTML. Feed overlay
-CSS explicitly honors `[hidden]` so hidden loading/error overlays do not cover
-a successfully loaded frame.
+The static dashboard uses an `<img>` connected once to `/video`. The browser
+draws a canvas HUD from `/api/tracks` (polled every 100 ms): animated boxes,
+labels, short motion trails, and a selectable target callout populated from
+scene descriptions. The HUD handles the frame's aspect ratio and normalized
+coordinates, and lets the user toggle layers and sensor effects; those choices
+are saved in local storage. Header health chips read `/api/system` every two
+seconds. Scene descriptions refresh every three seconds; statistics and visits
+refresh every five seconds. The dashboard reports connection, loading, and
+feed-error states, and builds dynamic DOM content with `textContent` rather
+than interpolating strings as HTML. Feed overlay CSS explicitly honors
+`[hidden]` so hidden loading/error overlays do not cover a successfully loaded
+frame.
 
 Thumbnails are in memory, not SQLite or disk. The tracker caches crop JPEGs
 when crop-bearing lifecycle events are emitted, independently of the LLM worker,
@@ -116,6 +134,33 @@ stutters after switching to MJPEG, check actual tracker FPS: camera throughput,
 YOLO model size, input resolution, and inference hardware remain the main
 limits.
 
+## Live tracker telemetry and profiling
+
+- `runtime_stats.py` is a lock-protected, in-memory latest-value store. It
+  computes tracker FPS from a rolling two-second frame window, keeps up to 20
+  successful LLM request durations for the average latency, and stores only the
+  latest track snapshot (no snapshot history). Uptime is measured from module
+  initialization.
+- `tracker_pipeline.py` increments the frame sequence and publishes visible
+  tracks after inference. Each box is normalized to the width and height of
+  the exact frame selected for `/video`; per-track age is measured from its
+  first observed frame. The snapshot contains sequence, frame dimensions,
+  Unix timestamp, and track list.
+- `llm_request.py` records wall-clock duration only after a successful streamed
+  request; failures are not added to latency statistics.
+- `GET /api/system` returns FPS, average recent successful LLM latency in
+  milliseconds, job counts, uptime, and UTC update time. Job counts are based
+  on `description_jobs`: `pending` means `status='pending' AND attempts=0`;
+  `retrying` means status is not `done` or `failed` and `attempts>0` (including
+  scheduled retries and in-progress jobs); `failed` and `done` use their
+  respective terminal statuses. `GET /api/tracks` returns the current
+  snapshot, or an empty sequence-zero snapshot before the tracker publishes.
+  Both responses set `Cache-Control: no-store`.
+- Set `PRECEPT_PROFILE=1` to enable the temporary tracker-stage profiler. It
+  warms up for 40 seconds, then reports stage mean/max timings and FPS every
+  50 frames, along with capture and published-frame details. With profiling
+  off (the default), it does not collect or print stage timings.
+
 ## Main files
 
 - `main.py` — process orchestration and CLI
@@ -128,4 +173,5 @@ limits.
 - `thumbnails.py`, `tts_narrator.py` — in-memory crops and speech output
 - `interface/dashboard.py` — FastAPI routes and MJPEG response
 - `interface/static/` — dashboard markup, styles, and browser behavior
+- `runtime_stats.py` — in-memory FPS, LLM latency, uptime, and track snapshot
 - `requirements.txt` — Python dependencies

@@ -64,16 +64,25 @@
         <section class="panel hud-panel controls-panel" aria-labelledby="layers-title">
           <div class="panel-title-row">
             <h2 id="layers-title" class="panel-title">Layers</h2>
-            <span class="panel-tag" id="layers-count">6</span>
+            <span class="panel-tag" id="layers-count">11</span>
           </div>
+          <div class="group-title">Overlay</div>
           <div class="layer-list">
+            <label class="layer"><span class="ic">◉</span>Persons<input type="checkbox" data-layer="persons" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">▣</span>Objects<input type="checkbox" data-layer="objects" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">≈</span>Trails<input type="checkbox" data-layer="trails" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">▭</span>Labels<input type="checkbox" data-layer="labels" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">⌁</span>Callout<input type="checkbox" data-layer="callout" checked><span class="sw"></span></label>
+          </div>
+          <div class="group-title">HUD</div>
+          <div class="layer-grid">
             <label class="layer"><span class="ic">≋</span>Scanlines<input type="checkbox" data-layer="scanlines" checked><span class="sw"></span></label>
             <label class="layer"><span class="ic">◐</span>Vignette<input type="checkbox" data-layer="vignette" checked><span class="sw"></span></label>
-            <label class="layer"><span class="ic">⌜</span>Frame brackets<input type="checkbox" data-layer="brackets" checked><span class="sw"></span></label>
-            <label class="layer"><span class="ic">▤</span>Activity panel<input type="checkbox" data-layer="activity" checked><span class="sw"></span></label>
-            <label class="layer"><span class="ic">◉</span>Targets panel<input type="checkbox" data-layer="targets" checked><span class="sw"></span></label>
-            <label class="layer"><span class="ic">≡</span>Visits panel<input type="checkbox" data-layer="visits" checked><span class="sw"></span></label>
-            <label class="layer"><span class="ic">⤢</span>Fill frame<input type="checkbox" data-layer="fill"><span class="sw"></span></label>
+            <label class="layer"><span class="ic">⌜</span>Brackets<input type="checkbox" data-layer="brackets" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">⤢</span>Fill<input type="checkbox" data-layer="fill"><span class="sw"></span></label>
+            <label class="layer"><span class="ic">▤</span>Activity<input type="checkbox" data-layer="activity" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">◉</span>Targets<input type="checkbox" data-layer="targets" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">≡</span>Visits<input type="checkbox" data-layer="visits" checked><span class="sw"></span></label>
           </div>
           <div class="panel-title-row sensor-title"><h2 class="panel-title">Sensor</h2><span class="panel-tag">keys 1–4</span></div>
           <div class="modes" role="radiogroup" aria-label="Sensor mode">
@@ -125,5 +134,6 @@
 <script src="/static/app.js"></script>
 <script src="/static/hud.js"></script>
 <script src="/static/health.js"></script>
+<script src="/static/overlay.js"></script>
 </body>
 </html>
