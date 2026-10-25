@@ -396,3 +396,54 @@ test-suite descriptions where they conflict with current source.
   remain; jobs already at the limit become `failed`. Retry delays and attempts
   survive restarts. The SQLite job table stores crop JPEG BLOBs, which
   increases database size; retention/cleanup policy remains future work.
+
+## Current Dashboard UI Addendum (2026-10-25)
+
+This addendum documents the advanced browser HUD and supersedes older dashboard
+descriptions above where they conflict with the current UI.
+
+### Live video and detection overlay
+
+- The dashboard keeps one MJPEG `<img>` connected to `/video`. By default the
+  tracker publishes a clean frame; a separate browser canvas draws the
+  detections from `/api/tracks`, so the HUD can be styled without changing the
+  video image. The optional `--burn-boxes` mode instead publishes YOLO's
+  annotated frame. The OpenCV `--visualize` window continues to show
+  annotations either way.
+- `interface/static/overlay.js` polls the latest track snapshot every 100 ms
+  while the tab is visible. It draws animated corner boxes, class/track ID and
+  confidence labels, short motion trails, and a fading exit animation. The
+  overlay uses the snapshot's frame dimensions and normalized boxes to align
+  detections with the displayed video. It stops drawing when snapshots become
+  stale.
+- Click a visible box or active-target card to select a track; the selected
+  target gets a highlighted marker and a callout with its latest description
+  (or an awaiting-description message). Active-target cards show the current
+  thumbnail, class, and description; unavailable thumbnails use a `NO CROP`
+  placeholder.
+
+### HUD controls and live status
+
+- `interface/static/hud.js` provides layer switches for people, objects,
+  trails, labels, callouts, scanlines, vignette, brackets, activity, targets,
+  visits, and fill-to-frame mode. The STD, NVG, FLIR, and CRT sensor modes are
+  selectable by button or keys 1–4. Layer and sensor selections persist in
+  browser local storage.
+- `interface/static/health.js` polls `/api/system` every two seconds and
+  displays tracker FPS, average successful LLM latency, queued/retrying job
+  count, and pending/retrying/failed job details. `interface/static/app.js`
+  manages the live-feed connection state, clock, active targets, today's
+  activity chart, and recent visits. Health and feed failures have explicit
+  visual states; dynamic text is inserted as text rather than HTML.
+- The main HUD styling and responsive layout live in
+  `interface/static/style.css`; the markup and script wiring are in
+  `interface/static/index.html`. On narrow screens the floating desktop HUD
+  panels become regular stacked content.
+
+### Running
+
+For the regular dashboard/HUD, run `python main.py --source 0` from the
+repository root with the project environment active, then open
+`http://localhost:8000`. `--visualize` is optional and opens the annotated
+OpenCV debug window; `--burn-boxes` is optional and burns detections into the
+browser video instead of relying only on the canvas overlay.
