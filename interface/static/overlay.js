@@ -8,8 +8,9 @@
   const sceneEl = document.getElementById("scene");
   if (!feedFrame || !sceneEl) return;
 
-  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const COLOR = { person: "#5fd4ff", other: "#ff7a5a", select: "#ffb23e" };
+  const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let reduceMotion = motionQuery.matches;
+  const COLOR = { person: "", other: "#ff7a5a", select: "#ffb23e" };
   const TRACK_POLL_MS = 100;
   const SCENE_POLL_MS = 3000;
   const TRAIL_MAX = 28;
@@ -19,6 +20,16 @@
   const CALLOUT_W = 270;
   const MONO = 'ui-monospace, "JetBrains Mono", Consolas, monospace';
   const SANS = 'Inter, "Segoe UI", sans-serif';
+  const performanceMode = () => document.body.classList.contains("perf-mode");
+  const refreshThemeColor = () => {
+    COLOR.person = getComputedStyle(document.documentElement).getPropertyValue("--hud").trim();
+  };
+  motionQuery.addEventListener("change", (event) => { reduceMotion = event.matches; });
+  new MutationObserver(refreshThemeColor).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
+  refreshThemeColor();
 
   const trkId = (id) => `TRK-${String(id).padStart(3, "0")}`;
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -129,7 +140,8 @@
       if (!document.hidden) {
         try { applySnapshot(await fetchJson("/api/tracks", 2000)); } catch (error) { /* stale handling in draw */ }
       }
-      await sleep(Math.max(40, TRACK_POLL_MS - (performance.now() - t0)));
+      const interval = performanceMode() ? TRACK_POLL_MS * 2 : TRACK_POLL_MS;
+      await sleep(Math.max(40, interval - (performance.now() - t0)));
     }
   };
 
@@ -270,7 +282,7 @@
     ctx.fillStyle = "#cfe4f2";
     ctx.font = `12px ${SANS}`;
     lines.forEach((line, i) => ctx.fillText(line, bx + 12, by + 30 + i * lineH));
-    if (!typingDone || Math.floor(now / 500) % 2 === 0) {
+    if (!reduceMotion && (!typingDone || Math.floor(now / 500) % 2 === 0)) {
       const last = lines[lines.length - 1] || "";
       const cx = bx + 12 + ctx.measureText(last).width + 2;
       const cy = by + 30 + (lines.length - 1) * lineH;
@@ -280,8 +292,12 @@
   };
 
   let lastFrameAt = performance.now();
+  let lastDrawAt = 0;
   const draw = (now) => {
     requestAnimationFrame(draw);
+    const minFrameMs = performanceMode() || reduceMotion ? 1000 / 15 : 0;
+    if (now - lastDrawAt < minFrameMs) return;
+    lastDrawAt = now;
     const dt = Math.min(0.1, (now - lastFrameAt) / 1000);
     lastFrameAt = now;
     ctx.clearRect(0, 0, cw, ch);
@@ -297,7 +313,7 @@
       for (let i = 0; i < 4; i += 1) v.box[i] += (v.target[i] - v.box[i]) * ease;
       let alpha = 1;
       if (v.gone) {
-        alpha = 1 - (now - v.gone) / FADE_MS;
+        alpha = reduceMotion ? 0 : 1 - (now - v.gone) / FADE_MS;
         if (alpha <= 0) { view.delete(v.id); if (selectedId === v.id) select(null); continue; }
       }
       if (!isVisible(v, f)) continue;
@@ -320,7 +336,7 @@
       ctx.globalAlpha = alpha * (0.35 + 0.65 * t);
       ctx.strokeStyle = color;
       ctx.shadowColor = color;
-      ctx.shadowBlur = v.id === selectedId || v.id === hoverId ? 16 : 9;
+      ctx.shadowBlur = performanceMode() ? 0 : v.id === selectedId || v.id === hoverId ? 16 : 9;
       ctx.lineWidth = v.id === selectedId ? 2.5 : 2;
       corners(q, clamp(Math.min(q.w, q.h) * 0.2, 10, 30));
       ctx.shadowBlur = 0;
@@ -402,6 +418,7 @@
       item.dataset.decorated = "1";
       item.tabIndex = 0;
       item.setAttribute("role", "button");
+      item.setAttribute("aria-label", `Select track ${Number(match[1])}`);
       item.setAttribute("aria-pressed", String(Number(match[1]) === selectedId));
       item.classList.toggle("is-selected", Number(match[1]) === selectedId);
       const chip = document.createElement("span");
@@ -459,6 +476,7 @@
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && selectedId !== null) select(null);
   });
+  document.addEventListener("precept:perfchange", () => { lastDrawAt = 0; });
 
   trackLoop();
   sceneLoop();
