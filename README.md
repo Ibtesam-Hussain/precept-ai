@@ -186,7 +186,9 @@ browser starts audio.
 ### Dashboard screenshots
 
 <!-- TODO: add screenshot/GIF -->
-![Dashboard screenshot](docs/dashboard.png)
+![Dashboard screenshot](utils/t_hover.png)
+![Dashboard screenshot](utils/o_selected.png)
+
 
 <!-- TODO: add screenshot/GIF -->
 ![HUD overlay demo](docs/hud-demo.gif)

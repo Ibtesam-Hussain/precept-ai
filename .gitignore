@@ -25,7 +25,6 @@ descriptions_log.jsonl
 *.mkv
 *.jpg
 *.jpeg
-*.png
 *.gif
 
 # Environment and secrets
