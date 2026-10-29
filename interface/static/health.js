@@ -1,6 +1,6 @@
 // Header health strip: polls /api/system and renders FPS, LLM latency, queue and job status.
 (() => {
-  const POLL_MS = 2000;
+  const POLL_MS = { normal: 2000, performance: 5000 };
   const health = document.getElementById("health");
   const chips = {
     fps: { chip: document.getElementById("chip-fps"), value: document.getElementById("h-fps") },
@@ -67,7 +67,16 @@
     }
   };
 
+  let pollTimer;
+  const schedulePoll = () => {
+    clearInterval(pollTimer);
+    const interval = document.body.classList.contains("perf-mode")
+      ? POLL_MS.performance
+      : POLL_MS.normal;
+    pollTimer = setInterval(poll, interval);
+  };
+  document.addEventListener("precept:perfchange", schedulePoll);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
-  setInterval(poll, POLL_MS);
+  schedulePoll();
   poll();
 })();

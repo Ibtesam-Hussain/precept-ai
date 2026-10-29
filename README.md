@@ -35,8 +35,10 @@ Instead of sending every frame to an LLM (slow and expensive), Precept calls the
 - **Event-based lifecycle.** `TRACK_NEW`, `TRACK_STABLE`, `TRACK_APPEARANCE_CHANGED` and `TRACK_EXITED`, debounced to avoid flicker.
 - **Cost-aware LLM usage.** Descriptions are requested for stable or changed tracks, with up to 8 queued jobs claimed at a time and a capped completion size.
 - **Multimodal descriptions.** Object crops are sent to a vision LLM on Groq, in groups of at most 3 images per call.
-- **Live MJPEG video.** The browser receives video over one persistent stream; dashboard data APIs refresh separately.
-- **Real-time dashboard.** Live feed, active targets, daily activity chart and recent visits.
+- **Live HUD dashboard.** Clean MJPEG video with browser-drawn detection boxes, labels, motion trails and click-to-lock descriptions.
+- **Dashboard controls.** Sensor modes, layer toggles, persistent Cyan/Amber/Green themes, and an adaptive performance mode.
+- **Live status and history.** A system-health strip, event stream, active targets, daily activity chart, recent visits and visit timeline.
+- **Optional sound cues.** A muted-by-default Web Audio blip for new tracks and a lower tone for exits; sound starts only after user interaction.
 - **In-memory active thumbnails.** Cached on the tracker thread, independently of LLM processing.
 - **Durable SQLite processing.** Events, description jobs, and resized job crops are stored in WAL mode so pending work can be recovered after a restart.
 - **Bounded provider retries.** Transient provider failures are retried with backoff; each job is limited to 5 attempts.
@@ -48,7 +50,8 @@ Instead of sending every frame to an LLM (slow and expensive), Precept calls the
 ```mermaid
 flowchart LR
     A[Camera / Video] --> B[YOLO Tracker<br/>tracker_pipeline.py]
-    B -->|annotated JPEG| C[frame_bus.py]
+    B -->|clean JPEG by default<br/>optional burned boxes| C[frame_bus.py]
+    B -->|FPS + latest tracks| R[runtime_stats.py]
     B -->|crops| D[Thumbnail Cache<br/>thumbnails.py]
     B -->|lifecycle events| E[Debounce<br/>debounce.py]
     E --> F[Event Bridge<br/>per-event handoff]
@@ -61,19 +64,21 @@ flowchart LR
     C --> K[FastAPI Dashboard<br/>/video, /api/*]
     D --> K
     I --> K
+    R --> K
     K --> L[Browser UI]
 ```
 
 | Stage | Responsibility |
 |---|---|
-| **Tracker** | Runs YOLO, publishes annotated frames, extracts crops, emits lifecycle events |
+| **Tracker** | Runs YOLO, publishes clean frames by default (or annotated frames with `--burn-boxes`), extracts crops, emits lifecycle events and publishes latest track state |
 | **Debounce** | Turns noisy per-frame state into clean `NEW` / `STABLE` / `CHANGED` / `EXITED` events |
 | **Event bridge** | Hands each event from the synchronous tracker to the async event ingestor |
 | **Event ingestor** | Persists every event; creates a durable description job and crop for stable or changed tracks |
 | **LLM worker** | Claims up to 8 due jobs, requests descriptions, stores results against their originating events, and queues narration |
 | **LLM request** | Streams completions from Groq's `qwen/qwen3.8-27b` model, capped at 256 tokens and split into groups of at most 3 images |
 | **Storage** | SQLite in WAL mode (`precept.db`), including event, description, and description-job data |
-| **Dashboard** | FastAPI serving the MJPEG stream, JSON APIs and static UI |
+| **Runtime statistics** | In-memory rolling FPS, successful LLM latency, uptime and latest track snapshot |
+| **Dashboard** | FastAPI serving the MJPEG stream, read-only JSON APIs and static UI |
 
 ## Quick Start
 
@@ -111,17 +116,23 @@ GROQ_API_KEY=your-key-here
 ### Run
 
 ```bash
-python main.py --source 0 --visualize
+python main.py --source 0
 ```
 
 Open **http://localhost:8000**.
+The default video is clean; the browser draws the live detection HUD. Add
+`--visualize` to open the annotated OpenCV debug window, or `--burn-boxes` to
+burn detections into the browser video.
 
 | Flag | Description | Default |
 |---|---|---|
 | `--source` | Camera index or video path | `0` |
 | `--model` | YOLO weights | `yolo26n.pt` |
 | `--visualize` | Show the OpenCV debug window (`q` stops tracking) | off |
+| `--burn-boxes` | Publish YOLO annotations in `/video` instead of a clean frame | off |
 | `--dashboard-port` | Dashboard port | `8000` |
+
+Set `PRECEPT_PROFILE=1` before launching to print tracker timing profiles. Profiling starts after a 40-second warm-up and reports every 50 frames.
 
 > Always run with the project's virtual environment so FastAPI and `pyttsx3` resolve from the same interpreter.
 
@@ -135,15 +146,69 @@ Open **http://localhost:8000**.
 | `/api/scene` | Active tracks with latest descriptions, filtered against the tracker's current live IDs |
 | `/api/stats` | Today's new-track counts (people and other objects) and hourly activity |
 | `/api/visits` | Up to 20 recent completed track visits with available descriptions |
+| `/api/system` | Tracker FPS, successful LLM latency, description-job counts, uptime and update time |
+| `/api/tracks` | Latest frame sequence, dimensions, timestamp and normalized visible tracks |
+| `/api/events?limit=30&after_id=<id>` | Bounded event page with event-linked description and highest event ID |
+| `/api/timeline?window_s=3600` | Visits overlapping a time window with active state and latest description |
 | `/thumb/{track_id}` | In-memory JPEG crop (404 if unavailable) |
 
-The UI connects to `/video` through a single `<img>` and refreshes scene, stats, visits, and status on a 5-second interval (status is also checked every 15 seconds). Dynamic content is rendered as text rather than interpolated as HTML.
+Example responses (timestamps shown as illustrative epoch values):
+
+`GET /api/system`
+```json
+{"fps": 4.2, "llm_latency_ms": 1800, "jobs": {"pending": 0, "retrying": 1, "failed": 0, "done": 4}, "uptime_s": 1234, "updated_at": "2026-10-29T12:00:00+00:00"}
+```
+
+`GET /api/tracks`
+```json
+{"seq": 4821, "frame": {"w": 640, "h": 480}, "ts": 1760000000.123, "tracks": [{"track_id": 4, "class_name": "person", "conf": 0.94, "box": [0.28, 0.35, 0.41, 0.88], "age_s": 12.4}]}
+```
+
+`GET /api/events?limit=30`
+```json
+{"events": [{"id": 101, "track_id": 4, "event_type": "track_stable", "class_name": "person", "confidence": 0.94, "timestamp": 1760000000.123, "description": "A person wearing a dark jacket"}], "last_id": 101}
+```
+
+`GET /api/timeline?window_s=3600`
+```json
+{"now": 1760003600.0, "window_s": 3600, "spans": [{"track_id": 4, "class_name": "person", "start": 1760000000.0, "end": null, "active": true, "description": "A person wearing a dark jacket"}]}
+```
+
+The UI connects to `/video` through a single `<img>`. The track overlay polls
+at 100 ms normally (200 ms in Performance mode); the health strip polls every
+2 seconds normally (5 seconds in Performance mode), event rows every 1.5
+seconds, and timeline data every 5 seconds. The timeline's sliding time axis
+redraws every second normally and every 5 seconds in Performance mode.
+Dynamic content is rendered as text rather than interpolated as HTML. Sound
+cues are optional, muted by default, and require a user gesture before the
+browser starts audio.
+
+### Dashboard screenshots
+
+<!-- TODO: add screenshot/GIF -->
+![Dashboard screenshot](docs/dashboard.png)
+
+<!-- TODO: add screenshot/GIF -->
+![HUD overlay demo](docs/hud-demo.gif)
+
+### Keyboard shortcuts
+
+- **1–4** — select STD, NVG, FLIR or CRT sensor mode.
+- **Esc** — clear the selected target.
+
+### Performance notes
+
+The tracker is CPU-bound on machines without a supported GPU, and the browser
+shares that CPU budget. Performance mode reduces HUD effects and polling rate.
+For further throughput improvements, consider a smaller YOLO `imgsz`, frame
+skipping, exporting the model to an optimized runtime, or using a GPU. These
+are tuning/deployment options, not additional CLI flags in the current app.
 
 ## Design Decisions
 
 **Event-driven instead of frame-driven LLM calls.** Describing every frame would be slow and costly. Debouncing track state and calling the model only on meaningful transitions cuts calls by orders of magnitude.
 
-**MJPEG for video, polling for dashboard data.** The browser keeps one long-lived `/video` connection for frames. Scene, stats, and visits are fetched from their JSON APIs every five seconds.
+**MJPEG for video, polling for dashboard data.** The browser keeps one long-lived `/video` connection for frames. Dashboard APIs provide latest-value or persisted event data; Performance mode relaxes the high-frequency overlay polling.
 
 **Thumbnails decoupled from the LLM.** Crops are cached on the tracker thread when events are emitted, so a slow or failing LLM request never delays or loses a thumbnail.
 
@@ -154,23 +219,21 @@ The UI connects to `/video` through a single `<img>` and refreshes scene, stats,
 ## Known Limitations
 
 - **No Re-ID.** A person who leaves and re-enters the frame gets a new track ID.
-- **Provider availability.** Only transient connection, timeout, rate-limit, and selected server errors are retried. Other errors, or jobs that exhaust five attempts, are marked failed; the dashboard does not currently expose job status.
+- **Provider availability.** Only transient connection, timeout, rate-limit, and selected server errors are retried. Other errors, or jobs that exhaust five attempts, are marked failed.
 - **No visit-image history.** Active-target thumbnails are in memory and lost on restart. Persisted job crops support description processing but are not exposed as visit snapshots.
-- **No automated tests** are currently included in the repository.
+- **Limited automated tests.** The checked-in test suite covers dashboard behavior, not the full tracker/LLM lifecycle.
 - **Prototype deployment.** The server binds to all network interfaces and has no authentication; do not expose it to untrusted networks.
-- **FPS is hardware-bound.** Throughput depends on camera, YOLO model size, input resolution and inference hardware.
+- **FPS is hardware-bound.** Throughput depends on camera, YOLO model size, input resolution and inference hardware; Performance mode reduces browser work but cannot accelerate inference.
 
 ## Roadmap
 
 - [ ] Add automated tests for event persistence, job recovery, retry behavior, and delayed descriptions
-- [ ] Show pending, retrying, and failed description-job status in the dashboard
 - [ ] Add retention/cleanup for completed and failed description jobs and stored crops
 - [ ] Per-visit crop snapshots for durable visual history
 - [ ] Alerts and zone-based triggers
 - [ ] Escalation tier: a stronger model judges flagged events
-- [ ] Natural-language query over event history
+- [ ] Natural-language “Ask Precept” query over event history
 - [ ] Docker packaging and config file
-- [ ] Dashboard upgrade: HUD overlay, event ticker, timeline scrubber
 
 ## Project Structure
 
@@ -191,7 +254,17 @@ precept-ai/
 ├── interface/
 │   ├── __init__.py         # Dashboard package
 │   ├── dashboard.py        # FastAPI routes and MJPEG response
-│   └── static/             # Dashboard HTML, CSS, JS
+│   └── static/
+│       ├── index.html      # Dashboard structure and accessible controls
+│       ├── style.css       # HUD layout, themes, and responsive styling
+│       ├── app.js          # Status, active targets, activity and visits
+│       ├── hud.js          # Sensor, theme and layer controls
+│       ├── health.js       # System-health strip
+│       ├── overlay.js      # Live track canvas and target selection
+│       ├── ticker.js       # Event stream and Visits tabs
+│       ├── timeline.js     # Visit timeline
+│       └── sound.js        # Optional Web Audio event cues
+├── runtime_stats.py        # In-memory FPS, latency, uptime and track state
 ├── contextforclaude.md     # Current project context
 ├── engineering-101.md      # Engineering notes and historical addenda
 ├── requirements.txt        # Python dependencies

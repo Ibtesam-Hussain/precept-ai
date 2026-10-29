@@ -6,6 +6,23 @@
 <meta name="theme-color" content="#04080d">
 <title>PRECEPT — Live Console</title>
 <link rel="stylesheet" href="/static/style.css">
+<script>
+  try {
+    const theme = localStorage.getItem("precept.hud.theme");
+    if (["cyan", "amber", "green"].includes(theme)) document.documentElement.dataset.theme = theme;
+    const state = JSON.parse(localStorage.getItem("precept.hud.v1") || "{}");
+    const lowCoreCount = Number.isFinite(navigator.hardwareConcurrency)
+      && navigator.hardwareConcurrency <= 4;
+    const perf = typeof state.layers?.perf === "boolean"
+      ? state.layers.perf
+      : lowCoreCount;
+    if (perf) document.documentElement.classList.add("perf-mode");
+  } catch (error) {
+    if (Number.isFinite(navigator.hardwareConcurrency) && navigator.hardwareConcurrency <= 4) {
+      document.documentElement.classList.add("perf-mode");
+    }
+  }
+</script>
 </head>
 <body>
   <svg class="visually-hidden" width="0" height="0" aria-hidden="true" focusable="false">
@@ -25,7 +42,7 @@
       <section class="feed-panel" aria-labelledby="feed-title">
         <h2 id="feed-title" class="visually-hidden">Live feed, camera 01</h2>
         <div class="feed-frame">
-          <img id="live-feed" src="/video" alt="Live annotated camera feed">
+          <img id="live-feed" src="/video" alt="Live camera feed with detection overlay">
           <div id="feed-loading" class="feed-loading">Waiting for video stream…</div>
           <div id="feed-error" class="feed-error" hidden>Video stream unavailable</div>
           <div class="feed-vignette" aria-hidden="true"></div>
@@ -64,7 +81,7 @@
         <section class="panel hud-panel controls-panel" aria-labelledby="layers-title">
           <div class="panel-title-row">
             <h2 id="layers-title" class="panel-title">Layers</h2>
-            <span class="panel-tag" id="layers-count">11</span>
+            <span class="panel-tag" id="layers-count">13</span>
           </div>
           <div class="group-title">Overlay</div>
           <div class="layer-list">
@@ -82,7 +99,9 @@
             <label class="layer"><span class="ic">⤢</span>Fill<input type="checkbox" data-layer="fill"><span class="sw"></span></label>
             <label class="layer"><span class="ic">▤</span>Activity<input type="checkbox" data-layer="activity" checked><span class="sw"></span></label>
             <label class="layer"><span class="ic">◉</span>Targets<input type="checkbox" data-layer="targets" checked><span class="sw"></span></label>
-            <label class="layer"><span class="ic">≡</span>Visits<input type="checkbox" data-layer="visits" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">≡</span>Log<input type="checkbox" data-layer="visits" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">▁</span>Timeline<input type="checkbox" data-layer="timeline" checked><span class="sw"></span></label>
+            <label class="layer"><span class="ic">◌</span>Performance<input type="checkbox" data-layer="perf"><span class="sw"></span></label>
           </div>
           <div class="panel-title-row sensor-title"><h2 class="panel-title">Sensor</h2><span class="panel-tag">keys 1–4</span></div>
           <div class="modes" role="radiogroup" aria-label="Sensor mode">
@@ -91,14 +110,29 @@
             <button type="button" class="mode" role="radio" aria-checked="false" data-mode="flir">FLIR</button>
             <button type="button" class="mode" role="radio" aria-checked="false" data-mode="crt">CRT</button>
           </div>
+          <div class="panel-title-row theme-title"><h2 class="panel-title">Theme</h2></div>
+          <div class="themes" role="radiogroup" aria-label="Dashboard theme">
+            <button type="button" class="theme-swatch" role="radio" aria-label="Cyan theme" aria-checked="true" data-theme="cyan" tabindex="0"></button>
+            <button type="button" class="theme-swatch" role="radio" aria-label="Amber theme" aria-checked="false" data-theme="amber" tabindex="-1"></button>
+            <button type="button" class="theme-swatch" role="radio" aria-label="Green theme" aria-checked="false" data-theme="green" tabindex="-1"></button>
+          </div>
+          <div class="group-title sound-title">Audio</div>
+          <label class="layer"><span class="ic">♪</span>Sound cues<input type="checkbox" data-sound-toggle><span class="sw"></span></label>
         </section>
 
         <section class="panel hud-panel log-panel" aria-labelledby="log-title">
+          <h2 id="log-title" class="visually-hidden">Activity log</h2>
           <div class="panel-title-row">
-            <h2 id="log-title" class="panel-title">Recent visits</h2>
-            <span class="panel-tag">Latest 20</span>
+            <div class="tabs" role="tablist" aria-label="Activity log">
+              <button type="button" class="tab is-active" role="tab" id="tab-events" aria-selected="true" aria-controls="events-feed">Events</button>
+              <button type="button" class="tab" role="tab" id="tab-visits" aria-selected="false" aria-controls="visits">Visits</button>
+            </div>
+            <span class="panel-tag" id="log-tag">Live</span>
           </div>
-          <div id="visits" class="visit-list" aria-live="polite">
+          <div id="events-feed" class="event-feed" role="tabpanel" aria-labelledby="tab-events">
+            <div class="empty loading">Loading events…</div>
+          </div>
+          <div id="visits" class="visit-list" role="tabpanel" aria-labelledby="tab-visits" aria-live="polite" hidden>
             <div class="empty">Loading activity…</div>
           </div>
         </section>
@@ -128,6 +162,28 @@
         </section>
       </div>
 
+
+      <section class="panel hud-panel timeline-panel" aria-labelledby="timeline-title">
+        <div class="panel-title-row">
+          <h2 id="timeline-title" class="panel-title">Visit timeline</h2>
+          <div class="tl-controls">
+            <span class="panel-tag" id="tl-count"></span>
+            <div class="tl-windows" role="group" aria-label="Time window">
+              <button type="button" class="tl-win" data-window="900">15m</button>
+              <button type="button" class="tl-win" data-window="3600">1h</button>
+              <button type="button" class="tl-win" data-window="21600">6h</button>
+              <button type="button" class="tl-win" data-window="86400">24h</button>
+            </div>
+          </div>
+        </div>
+        <div class="tl-body" id="tl-body" role="img" aria-label="Visit timeline">
+          <div class="tl-lanes" id="tl-lanes"></div>
+          <div class="tl-empty" id="tl-empty" hidden>No visits in this window</div>
+          <div class="tl-cursor" id="tl-cursor" hidden><span id="tl-cursor-time"></span></div>
+        </div>
+        <div class="tl-axis" id="tl-axis" aria-hidden="true"></div>
+        <div class="tl-tip" id="tl-tip" hidden></div>
+      </section>
     </div>
   </main>
 
@@ -135,5 +191,8 @@
 <script src="/static/hud.js"></script>
 <script src="/static/health.js"></script>
 <script src="/static/overlay.js"></script>
+<script src="/static/ticker.js"></script>
+<script src="/static/timeline.js"></script>
+<script src="/static/sound.js"></script>
 </body>
 </html>
