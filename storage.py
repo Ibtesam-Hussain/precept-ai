@@ -54,6 +54,14 @@ def init_db():
             )
         """)
         _conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_events_timestamp
+            ON events(timestamp)
+        """)
+        _conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_events_track_id
+            ON events(track_id)
+        """)
+        _conn.execute("""
             CREATE TABLE IF NOT EXISTS descriptions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 track_id INTEGER,
@@ -63,6 +71,10 @@ def init_db():
                 timestamp REAL,
                 event_id INTEGER REFERENCES events(id)
             )
+        """)
+        _conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_descriptions_event_id
+            ON descriptions(event_id)
         """)
         description_columns = {
             row[1] for row in _conn.execute("PRAGMA table_info(descriptions)")
@@ -384,6 +396,203 @@ def get_recent_events(limit=50):
          "confidence": r[4], "frame_idx": r[5], "timestamp": r[6]}
         for r in rows
     ]
+
+
+def get_events(limit=30, after_id=None):
+    """Return a bounded event page with descriptions linked to each event."""
+    limit = max(1, min(int(limit), 200))
+    with _lock:
+        last_id = _conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM events"
+        ).fetchone()[0]
+        if after_id is None:
+            rows = _conn.execute(
+                """
+                SELECT e.id, e.track_id, e.event_type, e.class_name,
+                       e.confidence, e.timestamp,
+                       (
+                           SELECT d.description
+                           FROM descriptions d
+                           WHERE d.event_id = e.id
+                           ORDER BY d.id DESC
+                           LIMIT 1
+                       )
+                FROM events e
+                ORDER BY e.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            rows.reverse()
+        else:
+            rows = _conn.execute(
+                """
+                SELECT e.id, e.track_id, e.event_type, e.class_name,
+                       e.confidence, e.timestamp,
+                       (
+                           SELECT d.description
+                           FROM descriptions d
+                           WHERE d.event_id = e.id
+                           ORDER BY d.id DESC
+                           LIMIT 1
+                       )
+                FROM events e
+                WHERE e.id > ?
+                ORDER BY e.id ASC
+                LIMIT ?
+                """,
+                (after_id, limit),
+            ).fetchall()
+
+    return {
+        "events": [
+            {
+                "id": row[0],
+                "track_id": row[1],
+                "event_type": row[2],
+                "class_name": row[3],
+                "confidence": row[4],
+                "timestamp": row[5],
+                "description": row[6],
+            }
+            for row in rows
+        ],
+        "last_id": last_id,
+    }
+
+
+def get_timeline(window_s=3600, live_track_ids=(), now=None):
+    """Return visits overlapping a time window, separating reused track IDs."""
+    window_s = max(60, min(int(window_s), 86400))
+    now = time.time() if now is None else now
+    window_start = now - window_s
+    live_track_ids = set(live_track_ids)
+
+    with _lock:
+        rows = _conn.execute(
+            """
+            SELECT DISTINCT track_id
+            FROM events
+            WHERE timestamp >= ? AND timestamp <= ? AND track_id IS NOT NULL
+            """,
+            (window_start, now),
+        ).fetchall()
+        candidate_track_ids = {
+            row[0] for row in rows
+        } | live_track_ids
+
+        events = []
+        track_ids = list(candidate_track_ids)
+        for offset in range(0, len(track_ids), 900):
+            batch = track_ids[offset:offset + 900]
+            placeholders = ",".join("?" for _ in batch)
+            events.extend(_conn.execute(
+                f"""
+                SELECT id, track_id, event_type, class_name, frame_idx, timestamp
+                FROM events
+                WHERE track_id IN ({placeholders})
+                ORDER BY id ASC
+                """,
+                batch,
+            ).fetchall())
+        events.sort(key=lambda event: event[0])
+
+        description_by_event = {}
+        event_ids = [event[0] for event in events]
+        for offset in range(0, len(event_ids), 900):
+            batch = event_ids[offset:offset + 900]
+            placeholders = ",".join("?" for _ in batch)
+            descriptions = _conn.execute(
+                f"""
+                SELECT event_id, description
+                FROM descriptions
+                WHERE event_id IN ({placeholders})
+                ORDER BY id ASC
+                """,
+                batch,
+            ).fetchall()
+            for event_id, description in descriptions:
+                description_by_event[event_id] = description
+
+    events_by_track = {}
+    for event in events:
+        events_by_track.setdefault(event[1], []).append(event)
+
+    spans = []
+    for track_id, track_events in events_by_track.items():
+        visits = []
+        open_visit = None
+        previous_frame = None
+        previous_timestamp = None
+
+        def close_open_visit(end):
+            if open_visit is not None:
+                open_visit["end"] = end
+                visits.append(open_visit.copy())
+
+        for event_id, _, event_type, class_name, frame_idx, timestamp in track_events:
+            if (
+                open_visit is not None
+                and previous_frame is not None
+                and frame_idx is not None
+                and frame_idx < previous_frame
+            ):
+                close_open_visit(previous_timestamp)
+                open_visit = None
+
+            if event_type == "track_new":
+                if open_visit is not None:
+                    close_open_visit(previous_timestamp)
+                open_visit = {
+                    "track_id": track_id,
+                    "class_name": class_name,
+                    "start": timestamp,
+                    "end": None,
+                    "active": False,
+                    "description": None,
+                    "last_event": timestamp,
+                }
+            elif event_type == "track_exited":
+                if open_visit is not None:
+                    open_visit["last_event"] = timestamp
+                    open_visit["end"] = timestamp
+                    visits.append(open_visit)
+                    open_visit = None
+            elif open_visit is not None:
+                open_visit["last_event"] = timestamp
+
+            if open_visit is not None:
+                if event_id in description_by_event:
+                    open_visit["description"] = description_by_event[event_id]
+                open_visit["last_event"] = timestamp
+
+            previous_frame = frame_idx
+            previous_timestamp = timestamp
+
+        if open_visit is not None:
+            is_live = track_id in live_track_ids
+            open_visit["active"] = is_live
+            if not is_live:
+                open_visit["end"] = open_visit["last_event"]
+            visits.append(open_visit)
+
+        spans.extend(visits)
+
+    spans = [
+        {
+            key: span[key]
+            for key in ("track_id", "class_name", "start", "end", "active", "description")
+        }
+        for span in spans
+        if span["start"] <= now
+        and (span["end"] is None or span["end"] >= window_start)
+    ]
+    spans.sort(key=lambda span: span["start"])
+    return {
+        "now": now,
+        "window_s": window_s,
+        "spans": spans[-300:],
+    }
 
 
 def get_job_counts():
