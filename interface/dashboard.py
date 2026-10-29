@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 import time
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -46,6 +47,36 @@ def system():
 def tracks():
     return JSONResponse(
         content=runtime_stats.get_tracks_snapshot(),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/events")
+def events(limit: int = 30, after_id: Optional[str] = None):
+    try:
+        parsed_after_id = int(after_id) if after_id is not None else None
+        if parsed_after_id is not None and not (
+            -(2 ** 63) <= parsed_after_id < 2 ** 63
+        ):
+            parsed_after_id = None
+    except (ValueError, OverflowError):
+        parsed_after_id = None
+    return JSONResponse(
+        content=storage.get_events(
+            limit=limit,
+            after_id=parsed_after_id,
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/timeline")
+def timeline(window_s: int = 3600):
+    return JSONResponse(
+        content=storage.get_timeline(
+            window_s=window_s,
+            live_track_ids=thumbnails.get_active_track_ids(),
+        ),
         headers={"Cache-Control": "no-store"},
     )
 
